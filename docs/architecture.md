@@ -276,7 +276,8 @@ cargo test
     --start 2021-01-01 --end 2026-08-05        # 按 daily 优先级链自动故障切换
 ./target/debug/mfctl screen                  # 选股流水线（M4 落地）
 ./target/debug/mfctl report                  # Markdown 报告（M5 落地）
-./target/debug/mfctl verify                  # 跨源抽查对账（M3/M4 落地）
+./target/debug/mfctl verify --symbol 600519.SH --start 2021-01-01 --end 2026-08-05 \
+                                             # 跨源抽查对账（要求同日多源数据）
 ./target/debug/mfctl backtest                # 历史月度截面回测（M4 落地）
 
 # Python 环境与 worker（Python SDK 独占源）

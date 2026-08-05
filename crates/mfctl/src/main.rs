@@ -9,7 +9,7 @@
 //! - `verify`    跨源抽查对账（M3/M4）
 //! - `backtest`  历史月度截面重建回测（M4）
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::str::FromStr;
@@ -60,8 +60,8 @@ enum Command {
     Report,
     /// 数据目录健康审计
     Doctor,
-    /// 跨源抽查对账（M3/M4 实现）
-    Verify,
+    /// 跨源抽查对账
+    Verify(VerifyArgs),
     /// 历史月度截面重建回测（M4 实现）
     Backtest,
 }
@@ -94,7 +94,7 @@ fn main() -> Result<()> {
         Command::Screen => cmd_pending("screen", "选股流水线（M4 实现）"),
         Command::Report => cmd_pending("report", "Markdown 报告（M4/M5 实现）"),
         Command::Doctor => cmd_doctor(&layout),
-        Command::Verify => cmd_pending("verify", "跨源对账（M3/M4 实现）"),
+        Command::Verify(args) => cmd_verify(&layout, args),
         Command::Backtest => cmd_pending("backtest", "历史截面回测（M4 实现）"),
     }
 }
@@ -270,6 +270,25 @@ fn cmd_sync(
         );
     }
     cmd_sync_single(registry, registry_path, layout, args)
+}
+
+#[derive(Args)]
+struct VerifyArgs {
+    /// 统一格式标的代码，如 600519.SH
+    #[arg(long)]
+    symbol: String,
+
+    /// 对账开始日期
+    #[arg(long)]
+    start: Option<String>,
+
+    /// 对账结束日期
+    #[arg(long)]
+    end: Option<String>,
+
+    /// 收盘价允许的最大相对差异，默认 1%
+    #[arg(long, default_value_t = 0.01)]
+    max_relative_close_diff: f64,
 }
 
 fn cmd_sync_single(
@@ -463,6 +482,87 @@ fn cmd_sync_http(layout: &Layout, source: &SourceConfig, args: SyncArgs) -> Resu
 fn parse_cli_date(value: &str, field: &str) -> Result<NaiveDate> {
     NaiveDate::parse_from_str(value, "%Y-%m-%d")
         .with_context(|| format!("{field} 日期格式必须是 YYYY-MM-DD"))
+}
+
+fn cmd_verify(layout: &Layout, args: VerifyArgs) -> Result<()> {
+    if !args.max_relative_close_diff.is_finite() || args.max_relative_close_diff < 0.0 {
+        anyhow::bail!("max-relative-close-diff 必须是非负有限数");
+    }
+    let start = args
+        .start
+        .as_deref()
+        .map(|value| parse_cli_date(value, "start"))
+        .transpose()?;
+    let end = args
+        .end
+        .as_deref()
+        .map(|value| parse_cli_date(value, "end"))
+        .transpose()?;
+    if let (Some(start), Some(end)) = (start, end) {
+        if start > end {
+            anyhow::bail!("start 不能晚于 end");
+        }
+    }
+
+    let store = ParquetStore::new(layout.clone());
+    let rows = store.query_daily_bars(&args.symbol, start, end)?;
+    let mut by_date: BTreeMap<NaiveDate, BTreeMap<String, f64>> = BTreeMap::new();
+    for row in rows {
+        by_date
+            .entry(row.trade_date)
+            .or_default()
+            .insert(row.source, row.close);
+    }
+
+    let mut compared_dates = 0;
+    let mut discrepancies = 0;
+    let mut sources = BTreeSet::new();
+    for (date, values) in &by_date {
+        if values.len() < 2 {
+            continue;
+        }
+        sources.extend(values.keys().cloned());
+        compared_dates += 1;
+        let min = values.values().copied().fold(f64::INFINITY, f64::min);
+        let max = values.values().copied().fold(f64::NEG_INFINITY, f64::max);
+        let relative_diff = if max == 0.0 {
+            0.0
+        } else {
+            (max - min) / max.abs()
+        };
+        if relative_diff > args.max_relative_close_diff {
+            discrepancies += 1;
+            println!(
+                "FAIL {} {} 收盘价差异 {:.4}%: {}",
+                args.symbol,
+                date,
+                relative_diff * 100.0,
+                values
+                    .iter()
+                    .map(|(source, close)| format!("{source}={close:.4}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
+
+    if compared_dates == 0 {
+        anyhow::bail!(
+            "标的 {} 在指定区间没有至少两源的同日数据，无法完成对账",
+            args.symbol
+        );
+    }
+    println!(
+        "VERIFY {}: {} 个日期、{} 个源，异常 {} 个",
+        args.symbol,
+        compared_dates,
+        sources.len(),
+        discrepancies
+    );
+    if discrepancies > 0 {
+        anyhow::bail!("跨源对账发现 {} 个异常日期", discrepancies);
+    }
+    Ok(())
 }
 
 fn single_parquet_file(dir: &Path) -> Result<PathBuf> {

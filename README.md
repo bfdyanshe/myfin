@@ -46,6 +46,9 @@ uv run --project py python -c "import pandas; print(pandas.__version__)"
 | `report` | 生成 Markdown 报告 | M4/M5 |
 | `doctor` | 数据目录健康审计 | 完成 |
 | `verify` | 跨源抽查对账 | M3/M4 |
+
+`verify` 读取本地 Parquet 中的同日多源记录，默认检查收盘价相对差异不超过 1%；
+需要先用不同源同步同一标的，数据不足两源时会明确失败。
 | `backtest` | 历史月度截面重建回测 | M4 |
 
 全局参数：`--registry <path>`（默认 `config/sources.toml`）、`--data-dir <path>`（默认 `$MYFIN_DATA` 或 `data/`）。
