@@ -16,11 +16,31 @@
 
 改动要及时提交 git commit，commit 需要以任务、功能维度良好组织。动手开发之前就要设计好开发阶段以便于提交。
 
+### git commit 规范
+
+- 主题行：祈使语气（imperative mood）、简短；使用 Conventional Commits 英文前缀（`feat`/`fix`/`docs`/`chore`/`refactor`/`test` 等），标签与标题之间用英文冒号+空格分隔。
+- 标题、正文使用中文；前缀标签保留英文。
+- 正文：72 字符换行，说明**做了什么与为什么**，使用完整句子。
+
+示例：
+
+```
+feat: 新增 tencent 行情适配器
+
+实现腾讯财经日K拉取与实时快照解析，作为 daily 优先级链的备源，
+在主源 mootdx 服务器失联时自动兜底。
+
+fix: 修复 manifest 增量追加导致的历史覆盖
+
+record() 原先直接重写整个文件，现在改为追加式 JSONL，
+断点续跑不再丢失已完成日期的同步状态。
+```
+
 ## Skills
 
-创建 skills 要放在 `~/.agents/skills` 里面。
+项目级 skills 放在 `.agents/skills/`（随仓库分发）；个人全局 skills 放在 `~/.agents/skills`。
 
-本仓库内置的数据源维护 skill 位于 `.opencode/skills/data-source-maintenance/`（项目级技能，随仓库分发）；**维护数据源前必须先读该 skill**，它覆盖注册表修改、优先级链调整、健康检查与故障切换的完整流程，不必在 AGENTS.md 重复。
+本仓库内置的数据源维护 skill 位于 `.agents/skills/data-source-maintenance/`；**维护数据源前必须先读该 skill**，它覆盖注册表修改、优先级链调整、健康检查与故障切换的完整流程，不必在 AGENTS.md 重复。
 
 ## 数据源与口径铁律
 
