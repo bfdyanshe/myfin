@@ -9,14 +9,18 @@
 //! - `verify`    跨源抽查对账（M3/M4）
 //! - `backtest`  历史月度截面重建回测（M4）
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
+use chrono::{Duration as ChronoDuration, NaiveDate, Utc};
 use clap::{Args, Parser, Subcommand};
 
-use mf_datasource::{Dataset, Registry, SourceKind, DEFAULT_REGISTRY_PATH};
+use mf_datasource::{
+    http::HttpAdapter, Dataset, Registry, SourceConfig, SourceKind, DEFAULT_REGISTRY_PATH,
+};
 use mf_storage::{
     Layout, ParquetStore, StagingManifest, SyncEntry, SyncManifest, SyncStatus,
 };
@@ -131,14 +135,34 @@ fn python_executable() -> std::ffi::OsString {
 
 fn cmd_sources_check(registry: &Registry, registry_path: &Path) -> Result<()> {
     let mut failed = 0;
+    let runtime = tokio::runtime::Runtime::new().context("初始化 HTTP 运行时失败")?;
     for source in &registry.sources {
         match source.kind {
             SourceKind::Http => {
-                println!(
-                    "FAIL {:<12} Rust HTTP 适配器尚未实现（注册表已登记）",
-                    source.name
-                );
-                failed += 1;
+                match HttpAdapter::from_config(source) {
+                    Ok(adapter) => {
+                        let report = runtime.block_on(adapter.health_check());
+                        if report.ok {
+                            println!(
+                                "OK   {:<12} latency={}ms",
+                                report.source,
+                                report.latency_ms.unwrap_or_default()
+                            );
+                        } else {
+                            println!(
+                                "FAIL {:<12} latency={}ms {}",
+                                report.source,
+                                report.latency_ms.unwrap_or_default(),
+                                report.error.unwrap_or_else(|| "未知错误".to_string())
+                            );
+                            failed += 1;
+                        }
+                    }
+                    Err(error) => {
+                        println!("FAIL {:<12} {}", source.name, error);
+                        failed += 1;
+                    }
+                }
             }
             SourceKind::PythonSdk => {
                 let mut command = ProcessCommand::new(python_executable());
@@ -223,12 +247,6 @@ fn cmd_sync(
     let source = registry
         .source(&args.source)
         .with_context(|| format!("注册表中不存在数据源: {}", args.source))?;
-    if source.kind != SourceKind::PythonSdk {
-        anyhow::bail!(
-            "数据源 {} 的 Rust HTTP 适配器尚未实现，当前 sync 只支持 Python SDK 源",
-            args.source
-        );
-    }
     let dataset = Dataset::from_str(&args.dataset)
         .map_err(|error| anyhow::anyhow!(error.to_string()))
         .with_context(|| format!("未知数据集: {}", args.dataset))?;
@@ -238,6 +256,15 @@ fn cmd_sync(
             args.source,
             dataset
         );
+    }
+    if source.kind == SourceKind::Http {
+        if dataset != Dataset::Daily {
+            anyhow::bail!(
+                "HTTP 源当前只支持 daily，同步数据集 {} 尚未实现",
+                dataset
+            );
+        }
+        return cmd_sync_http(layout, source, args);
     }
     if !matches!(
         dataset,
@@ -339,6 +366,69 @@ fn cmd_sync(
         println!("  {}", path.display());
     }
     Ok(())
+}
+
+fn cmd_sync_http(layout: &Layout, source: &SourceConfig, args: SyncArgs) -> Result<()> {
+    let end = args
+        .end
+        .as_deref()
+        .map(|value| parse_cli_date(value, "end"))
+        .transpose()?
+        .unwrap_or_else(|| Utc::now().date_naive());
+    let start = args
+        .start
+        .as_deref()
+        .map(|value| parse_cli_date(value, "start"))
+        .transpose()?
+        .unwrap_or_else(|| end - ChronoDuration::days(30));
+    if start > end {
+        anyhow::bail!("start 不能晚于 end");
+    }
+
+    let adapter = HttpAdapter::from_config(source)?;
+    let runtime = tokio::runtime::Runtime::new().context("初始化 HTTP 运行时失败")?;
+    let rows = runtime.block_on(adapter.fetch_daily(&args.symbol, start, end))?;
+    if rows.is_empty() {
+        anyhow::bail!(
+            "数据源 {} 在 {} 至 {} 没有返回日线数据",
+            source.name,
+            start,
+            end
+        );
+    }
+
+    let store = ParquetStore::new(layout.clone());
+    let paths = store.write_daily_bars(&rows)?;
+    let manifest_path = layout.manifest_path(Dataset::Daily);
+    let mut sync_manifest = SyncManifest::load(&manifest_path)
+        .with_context(|| format!("读取同步 manifest 失败: {}", manifest_path.display()))?;
+    let mut date_counts = BTreeMap::new();
+    for row in &rows {
+        *date_counts.entry(row.trade_date).or_insert(0_u64) += 1;
+    }
+    for (date, count) in date_counts {
+        sync_manifest.record(
+            &manifest_path,
+            SyncEntry::done(Dataset::Daily, &source.name, date, count),
+        )?;
+    }
+    println!(
+        "已接管 {} 条 {} 日线记录（{} 至 {}），生成 {} 个分区文件",
+        rows.len(),
+        source.name,
+        start,
+        end,
+        paths.len()
+    );
+    for path in paths {
+        println!("  {}", path.display());
+    }
+    Ok(())
+}
+
+fn parse_cli_date(value: &str, field: &str) -> Result<NaiveDate> {
+    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .with_context(|| format!("{field} 日期格式必须是 YYYY-MM-DD"))
 }
 
 fn single_parquet_file(dir: &Path) -> Result<PathBuf> {

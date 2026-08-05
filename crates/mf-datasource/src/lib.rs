@@ -6,6 +6,7 @@
 //! `.agents/skills/data-source-maintenance/`。
 
 pub mod dataset;
+pub mod http;
 pub mod registry;
 pub mod source;
 

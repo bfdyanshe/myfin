@@ -48,8 +48,9 @@
 
 - `kind = "http"`（Rust 原生适配器）。`web.ifzq.gtimg.cn` 日 K（单次最多 640 根，需分页），
   `qt.gtimg.cn` 实时快照（含 PE/PB/市值，**GBK 编码**需 iconv 解码）。无财务。
-- 口径要点：腾讯 `fqkline` 返回的是其自有前复权且仅限近 640 根，
-  **本仓库一律取不复权段或仅用实时快照**；长期分位以 baostock 复权因子为准。
+- 口径要点：适配器使用 `day` 不复权段，分页上限按 640 根处理；长期分位以 baostock
+  复权因子为准。腾讯该日线接口当前返回成交量但不返回成交额，统一 schema 中
+  `amount` 暂置为 `0`，不能将其用于成交额分析。
 
 ### 1.3 tushare —— 校准/兜底源（免费档 120 积分）
 
@@ -193,8 +194,9 @@
 2. **`mfctl sources list`**：确认 YAML 解析通过、`Registry::validate` 校验通过
    （版本必须为 1；python_sdk 必须有 `package`；链引用的源必须已定义）。
 3. **`mfctl sources check`**：按注册表逐源跑基准股探针（`probe.symbol` + `lookback_days`），
-   输出健康报告（`HealthReport { source, ok, latency_ms, error }`）。Python 源已通过
-   worker 接入；Rust HTTP 源尚未实现时明确报告失败，不会静默通过。
+   输出健康报告（`HealthReport { source, ok, latency_ms, error }`）。Python 源通过
+   worker 接入，腾讯/Tushare 通过 Rust HTTP 适配器接入；缺 token 或接口失败时明确报告，
+   不会静默通过。
 4. **更新适配器与本文档**：按新源/新字段同步适配器（python worker 或 Rust 原生），
    并更新 `docs/data-sources.md` 与本文件一致。
 

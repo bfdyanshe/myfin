@@ -40,8 +40,8 @@ uv run --project py python -c "import pandas; print(pandas.__version__)"
 | 命令 | 用途 | 状态 |
 | --- | --- | --- |
 | `sources list` | 列出来源与优先级链 | 完成 |
-| `sources check` | 健康检查（基准股探针） | M3（Python 源已接入，HTTP 源待实现） |
-| `sync` | 增量同步单源单标的数据 | M3（Python SDK 已接入，HTTP 待实现） |
+| `sources check` | 健康检查（基准股探针） | M3（Python + Rust HTTP 已接入） |
+| `sync` | 增量同步单源单标的数据 | M3（Python SDK + Rust HTTP daily 已接入） |
 | `screen` | 运行选股流水线 | M4 |
 | `report` | 生成 Markdown 报告 | M4/M5 |
 | `doctor` | 数据目录健康审计 | 完成 |
@@ -52,7 +52,7 @@ uv run --project py python -c "import pandas; print(pandas.__version__)"
 
 ## 数据源
 
-与 config/sources.toml 注册表一致（5 个源，全部免费）。Python SDK 适配器（baostock/akshare/mootdx）已在 py/src/myfin_py/ 就位；Rust HTTP 适配器（tencent/tushare）待 M3 落地。
+与 config/sources.toml 注册表一致（5 个源，全部免费）。Python SDK 适配器（baostock/akshare/mootdx）与 Rust HTTP 日线适配器（tencent/tushare）均已就位；Tushare 需要设置 `TUSHARE_TOKEN`。
 
 | 源 | 角色 | 鉴权 | 数据集 | 优先级链 |
 | --- | --- | --- | --- | --- |
@@ -102,7 +102,7 @@ myfin/
 
 - **M1 脚手架（完成）**：workspace、领域模型、注册表解析、数据目录、CLI 骨架、sources list/doctor、Python worker 与 3 个 SDK 适配器骨架、数据源维护 skill、全套文档。
 - **M2 存储层（完成）**：Parquet 数据层 + DuckDB 查询（SQLite 可选）、增量同步状态机。
-- **M3 数据源适配器**：Rust HTTP 适配器（tencent/tushare）、sources check、sync、verify。
+- **M3 数据源适配器**：Rust HTTP 日线适配器（tencent/tushare）、sources check、sync 已接入；verify 待做。
 - **M4 指标 + 筛选 + 回测**：估值分位、筛选流水线 screen、backtest。
 - **M5 报告**：report（Markdown 报告含数据质量页）。
 - **M6 打磨**：性能、稳定性、文档完善。

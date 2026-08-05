@@ -11,6 +11,9 @@ toml.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
 async-trait = "0.1"
+reqwest.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
 
 [lib]
 name = "mf_datasource"

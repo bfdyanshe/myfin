@@ -194,8 +194,8 @@ flowchart LR
 | 子命令 | 说明 | 实现状态 |
 | --- | --- | --- |
 | `sources list` | 列出注册表源与优先级链 | ✅ M1 已实现 |
-| `sources check` | 全源健康检查（基准股探针） | M3：Python 源已接入，HTTP 源待实现 |
-| `sync` | 增量同步单源单标的数据 | M3：Python SDK 已接入 |
+| `sources check` | 全源健康检查（基准股探针） | M3：Python + Rust HTTP 已接入 |
+| `sync` | 增量同步单源单标的数据 | M3：Python SDK + Rust HTTP daily 已接入 |
 | `screen` | 运行选股流水线 | M4 实现 |
 | `report` | 生成 Markdown 报告 | M4/M5 实现 |
 | `doctor` | 数据目录健康审计（目录统计） | ✅ M1 已实现 |
@@ -232,7 +232,7 @@ flowchart LR
 | --- | --- | --- |
 | M1 | workspace 骨架、mf-core 领域模型、注册表、布局 + manifest、CLI 骨架、Python worker 三源、docs + skill | ✅ 完成（fd92776） |
 | M2 | 存储层：Parquet 写入 + DuckDB 查询引擎（SQLite 可选） | ✅ 完成 |
-| M3 | 数据源适配器（Rust HTTP 两源）、增量同步、`sources check`/`sync`/`verify` | 进行中：Python 探针已接入 |
+| M3 | 数据源适配器（Rust HTTP 两源）、增量同步、`sources check`/`sync`/`verify` | 进行中：HTTP daily 已接入，verify 待做 |
 | M4 | 选股流水线 + as-of 模块 + 月度截面重建回测（`screen`/`backtest`） | 待做 |
 | M5 | 报告完善（候选清单 + 数据质量页）、环境扫描 context 流程 | 待做 |
 | M6 | 硬化：熔断/重试打磨、质量门补全、文档收尾 | 待做 |
@@ -244,7 +244,7 @@ myfin/
 ├── Cargo.toml                        # workspace（6 crates）
 ├── crates/
 │   ├── mf-core/                      # 领域模型与统一 schema（bar/financial/symbol/valuation/error）
-│   ├── mf-datasource/                # 数据源注册表解析（registry.rs）、Source trait、优先级链
+│   ├── mf-datasource/                # 注册表、Source trait、HTTP 适配器、优先级链
 │   ├── mf-storage/                   # 数据目录布局 + 增量同步状态机（manifest）
 │   ├── mf-screener/                  # 选股流水线配置（config.rs，对应 config/screen.toml）
 │   ├── mf-report/                    # Markdown 报告渲染器
