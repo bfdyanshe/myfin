@@ -277,12 +277,16 @@ cargo test
 ./target/debug/mfctl verify                  # 跨源抽查对账（M3/M4 落地）
 ./target/debug/mfctl backtest                # 历史月度截面回测（M4 落地）
 
-# Python worker（Python SDK 独占源）
-PYTHONPATH=py/src python3 -m myfin_py.worker list-sources
-PYTHONPATH=py/src python3 -m myfin_py.worker health-check
-PYTHONPATH=py/src python3 -m myfin_py.worker fetch-daily \
+# Python 环境与 worker（Python SDK 独占源）
+uv sync --project py
+uv run --project py python -m myfin_py.worker list-sources
+uv run --project py python -m myfin_py.worker health-check
+uv run --project py python -m myfin_py.worker fetch-daily \
     --source baostock --symbol 600519.SH --start 2021-01-01 --end 2026-08-05 --out data/staging
 
 # 新 py 文件提交前校验
-python3 -m py_compile <file>
+uv run --project py python -m py_compile <file>
 ```
+
+`mfctl` 会自动发现仓库根目录下的 `py/.venv`；如需指定其他 Python，
+可设置 `MYFIN_PYTHON` 环境变量覆盖自动发现结果。

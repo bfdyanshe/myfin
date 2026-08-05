@@ -22,7 +22,16 @@ cargo build                                          # 构建 mfctl（需 Rust 1
 ./target/debug/mfctl screen                          # 选股流水线（M4 实现，当前未实现）
 ```
 
-使用前提：仅 `TUSHARE_TOKEN` 环境变量为可选（仅 tushare 兜底源需要）；`cargo build` 后即可运行 mfctl。
+Python 数据源使用 uv 管理。安装 uv 后，在仓库根目录执行：
+
+```bash
+uv sync --project py
+uv run --project py python -c "import pandas; print(pandas.__version__)"
+```
+
+这会创建 `py/.venv` 并按 `py/pyproject.toml` 和 `py/uv.lock` 安装依赖。若 uv 不在 PATH，
+可用 `python -m uv` 替代 `uv`。`mfctl` 在未设置 `MYFIN_PYTHON` 时会自动优先使用该虚拟环境。
+仅 tushare 兜底源需要额外设置 `TUSHARE_TOKEN` 环境变量。
 
 ## CLI 子命令
 

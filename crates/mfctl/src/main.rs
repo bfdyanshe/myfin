@@ -116,6 +116,19 @@ fn kind_label(kind: SourceKind) -> &'static str {
     kind.label()
 }
 
+fn python_executable() -> std::ffi::OsString {
+    if let Some(python) = std::env::var_os("MYFIN_PYTHON") {
+        return python;
+    }
+    for candidate in ["py/.venv/Scripts/python.exe", "py/.venv/bin/python"] {
+        let path = Path::new(candidate);
+        if path.is_file() {
+            return path.as_os_str().to_owned();
+        }
+    }
+    std::ffi::OsString::from("python")
+}
+
 fn cmd_sources_check(registry: &Registry, registry_path: &Path) -> Result<()> {
     let mut failed = 0;
     for source in &registry.sources {
@@ -128,9 +141,7 @@ fn cmd_sources_check(registry: &Registry, registry_path: &Path) -> Result<()> {
                 failed += 1;
             }
             SourceKind::PythonSdk => {
-                let python = std::env::var_os("MYFIN_PYTHON")
-                    .unwrap_or_else(|| std::ffi::OsString::from("python"));
-                let mut command = ProcessCommand::new(python);
+                let mut command = ProcessCommand::new(python_executable());
                 command.args([
                     "-m",
                     "myfin_py.worker",
@@ -246,9 +257,7 @@ fn cmd_sync(
         .join("staging")
         .join(format!("sync-{}", unique_suffix()));
     std::fs::create_dir_all(&staging_dir)?;
-    let python = std::env::var_os("MYFIN_PYTHON")
-        .unwrap_or_else(|| std::ffi::OsString::from("python"));
-    let mut command = ProcessCommand::new(python);
+    let mut command = ProcessCommand::new(python_executable());
     command.args([
         "-m",
         "myfin_py.worker",
