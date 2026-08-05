@@ -18,9 +18,11 @@ use anyhow::{Context, Result};
 use chrono::{Duration as ChronoDuration, NaiveDate, Utc};
 use clap::{Args, Parser, Subcommand};
 
+use mf_backtest::{run_historical, BacktestOptions, HistoricalCandidate};
 use mf_datasource::{
     http::HttpAdapter, Dataset, Registry, SourceConfig, SourceKind, DEFAULT_REGISTRY_PATH,
 };
+use mf_report::{backtest_markdown, candidate_markdown, ReportInput};
 use mf_screener::{screen, ScreenInput, ScreenerConfig};
 use mf_storage::{
     Layout, ParquetStore, StagingManifest, SyncEntry, SyncManifest, SyncStatus,
@@ -57,14 +59,14 @@ enum Command {
     Sync(SyncArgs),
     /// 运行选股流水线（M4）
     Screen(ScreenArgs),
-    /// 生成 Markdown 报告（M4/M5 实现）
-    Report,
+    /// 生成 Markdown 报告（M4/M5）
+    Report(ReportArgs),
     /// 数据目录健康审计
     Doctor,
     /// 跨源抽查对账
     Verify(VerifyArgs),
-    /// 历史月度截面重建回测（M4 实现）
-    Backtest,
+    /// 历史月度截面重建回测（M4）
+    Backtest(BacktestArgs),
 }
 
 #[derive(Subcommand)]
@@ -93,10 +95,10 @@ fn main() -> Result<()> {
         },
         Command::Sync(args) => cmd_sync(&registry, &cli.registry, &layout, args),
         Command::Screen(args) => cmd_screen(&layout, args),
-        Command::Report => cmd_pending("report", "Markdown 报告（M4/M5 实现）"),
+        Command::Report(args) => cmd_report(&layout, args),
         Command::Doctor => cmd_doctor(&layout),
         Command::Verify(args) => cmd_verify(&layout, args),
-        Command::Backtest => cmd_pending("backtest", "历史截面回测（M4 实现）"),
+        Command::Backtest(args) => cmd_backtest(&layout, args),
     }
 }
 
@@ -309,6 +311,48 @@ struct ScreenArgs {
     /// 完整 ScreenInput JSON；用于提供全市场与行业估值样本
     #[arg(long)]
     input: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct BacktestArgs {
+    /// 包含历史 HistoricalCandidate 数组的 JSON 文件
+    #[arg(long)]
+    input: PathBuf,
+
+    /// 筛选配置文件
+    #[arg(long, default_value = "config/screen.toml")]
+    config: PathBuf,
+
+    /// 回测起始日期
+    #[arg(long)]
+    start: Option<String>,
+
+    /// 回测结束日期
+    #[arg(long)]
+    end: Option<String>,
+
+    /// 固定持有期（月）
+    #[arg(long, default_value_t = 6)]
+    hold_months: u32,
+
+    /// 只运行默认参数，不生成敏感性网格
+    #[arg(long)]
+    no_sensitivity: bool,
+
+    /// 报告输出路径；默认写入 data/reports/backtest-YYYYMMDD.md
+    #[arg(long)]
+    out: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct ReportArgs {
+    /// 包含候选清单和数据质量信息的 JSON 文件
+    #[arg(long)]
+    input: PathBuf,
+
+    /// 报告输出路径；默认写入 data/reports/report-YYYYMMDD.md
+    #[arg(long)]
+    out: Option<PathBuf>,
 }
 
 fn cmd_sync_single(
@@ -638,6 +682,82 @@ fn cmd_screen(layout: &Layout, args: ScreenArgs) -> Result<()> {
     Ok(())
 }
 
+fn cmd_backtest(layout: &Layout, args: BacktestArgs) -> Result<()> {
+    if args.hold_months == 0 {
+        anyhow::bail!("hold-months 必须大于 0");
+    }
+    let config = ScreenerConfig::load(&args.config)
+        .with_context(|| format!("加载筛选配置 {} 失败", args.config.display()))?;
+    let raw = std::fs::read_to_string(&args.input)
+        .with_context(|| format!("读取回测输入 {} 失败", args.input.display()))?;
+    let candidates = serde_json::from_str::<Vec<HistoricalCandidate>>(&raw)
+        .with_context(|| format!("解析回测输入 {} 失败", args.input.display()))?;
+    if candidates.is_empty() {
+        anyhow::bail!("回测输入没有候选标的");
+    }
+    let start = args
+        .start
+        .as_deref()
+        .map(|value| parse_cli_date(value, "start"))
+        .transpose()?;
+    let end = args
+        .end
+        .as_deref()
+        .map(|value| parse_cli_date(value, "end"))
+        .transpose()?;
+    if let (Some(start), Some(end)) = (start, end) {
+        if start > end {
+            anyhow::bail!("start 不能晚于 end");
+        }
+    }
+    let options = BacktestOptions {
+        start,
+        end,
+        hold_months: args.hold_months,
+        include_sensitivity: !args.no_sensitivity,
+    };
+    let report = run_historical(&candidates, &config, &options);
+    let output = args.out.unwrap_or_else(|| {
+        layout.report_path(&format!(
+            "backtest-{}.md",
+            Utc::now().format("%Y%m%d")
+        ))
+    });
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&output, backtest_markdown(&report))?;
+    println!(
+        "BACKTEST: {} 个快照，入选 {} 次，完成收益 {} 个；报告 {}",
+        report.evaluated_snapshots,
+        report.selected,
+        report.completed.count,
+        output.display()
+    );
+    Ok(())
+}
+
+fn cmd_report(layout: &Layout, args: ReportArgs) -> Result<()> {
+    let raw = std::fs::read_to_string(&args.input)
+        .with_context(|| format!("读取报告输入 {} 失败", args.input.display()))?;
+    let input = serde_json::from_str::<ReportInput>(&raw)
+        .with_context(|| format!("解析报告输入 {} 失败", args.input.display()))?;
+    let output = args.out.unwrap_or_else(|| {
+        layout.report_path(&format!("report-{}.md", Utc::now().format("%Y%m%d")))
+    });
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&output, candidate_markdown(&input))?;
+    println!(
+        "REPORT: {} 个候选，{} 个数据源状态；报告 {}",
+        input.candidates.len(),
+        input.source_health.len(),
+        output.display()
+    );
+    Ok(())
+}
+
 fn single_parquet_file(dir: &Path) -> Result<PathBuf> {
     let mut files = std::fs::read_dir(dir)
         .with_context(|| format!("staging 数据目录不存在: {}", dir.display()))?
@@ -702,9 +822,4 @@ fn layout_summary(layout: &Layout) -> Result<(usize, usize)> {
     }
     walk(&layout.root, &mut dirs, &mut files)?;
     Ok((dirs, files))
-}
-
-fn cmd_pending(name: &str, msg: &str) -> Result<()> {
-    println!("`mfctl {name}` 尚未实现 — {msg}");
-    Ok(())
 }

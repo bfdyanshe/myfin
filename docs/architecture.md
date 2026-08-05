@@ -42,11 +42,12 @@ graph TD
 | `mf-datasource` | 数据源抽象（`Source` trait）、注册表（`Registry`）、数据集与优先级链 | 加载并校验 `config/sources.toml` |
 | `mf-storage` | 数据目录布局、Parquet 接管、DuckDB 查询、增量同步状态机 | `Layout`/`ParquetStore`/`SyncManifest` |
 | `mf-screener` | 六阶段选股流水线（universe→…→output） | 参数来自 `config/screen.toml` |
+| `mf-backtest` | 月度截面回测与敏感性分析 | 复用 `mf-screener` 的 as-of 筛选 |
 | `mf-report` | Markdown 报告渲染（`MarkdownReport`/`Candidate`） | 候选清单表格 + 数据质量页 |
 | `mfctl` | CLI 入口（`--registry`/`--data-dir` 全局参数 + 7 个子命令） | 见第 8 节 |
 
-依赖方向单向向下：`mfctl` 依赖其余全部，`mf-datasource`/`mf-storage`/`mf-screener`/`mf-report`
-只依赖 `mf-core`，不允许反向依赖。
+依赖方向单向向下：`mfctl` 依赖其余全部，`mf-backtest` 依赖 `mf-screener`，
+`mf-report` 依赖 `mf-backtest` 与 `mf-core`，不允许反向依赖。
 
 ## 3. 数据流
 
@@ -197,7 +198,7 @@ flowchart LR
 | `sources check` | 全源健康检查（基准股探针） | M3：Python + Rust HTTP 已接入 |
 | `sync` | 增量同步单源单标的数据 | M3：Python SDK + Rust HTTP daily 已接入 |
 | `screen` | 运行选股流水线 | M4 实现 |
-| `report` | 生成 Markdown 报告 | M4/M5 实现 |
+| `report` | 生成候选与数据质量 Markdown 报告 | M5（JSON 输入已接入） |
 | `doctor` | 数据目录健康审计（目录统计） | ✅ M1 已实现 |
 | `verify` | 跨源抽查对账 | M3/M4 实现 |
 | `backtest` | 历史月度截面重建回测 | M4 实现 |
@@ -233,8 +234,8 @@ flowchart LR
 | M1 | workspace 骨架、mf-core 领域模型、注册表、布局 + manifest、CLI 骨架、Python worker 三源、docs + skill | ✅ 完成（fd92776） |
 | M2 | 存储层：Parquet 写入 + DuckDB 查询引擎（SQLite 可选） | ✅ 完成 |
 | M3 | 数据源适配器（Rust HTTP 两源）、增量同步、`sources check`/`sync`/`verify` | ✅ 完成 |
-| M4 | 选股流水线 + as-of 模块 + 月度截面重建回测（`screen`/`backtest`） | 进行中：指标与纯函数筛选引擎已接入 |
-| M5 | 报告完善（候选清单 + 数据质量页）、环境扫描 context 流程 | 待做 |
+| M4 | 选股流水线 + as-of 模块 + 月度截面重建回测（`screen`/`backtest`） | 进行中：筛选与 JSON 输入回测已接入 |
+| M5 | 报告完善（候选清单 + 数据质量页）、环境扫描 context 流程 | 进行中：候选与数据质量页已接入 |
 | M6 | 硬化：熔断/重试打磨、质量门补全、文档收尾 | 待做 |
 
 ## 12. 仓库布局

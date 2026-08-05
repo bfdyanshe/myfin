@@ -5,8 +5,10 @@
 
 use std::fmt::Write;
 
+use mf_backtest::BacktestReport;
+
 /// 候选股条目（M4 填充完整字段）。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Candidate {
     pub symbol: String,
     pub name: String,
@@ -31,7 +33,7 @@ pub struct Candidate {
 }
 
 /// 数据源健康状态（报告数据质量页用）。
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SourceHealthLine {
     pub source: String,
     pub ok: bool,
@@ -105,4 +107,169 @@ pub fn candidate_table(candidates: &[Candidate]) -> Vec<Vec<String>> {
             ]
         })
         .collect()
+}
+
+/// 渲染候选清单和数据质量页。
+pub fn candidate_markdown(input: &ReportInput) -> String {
+    let mut markdown = MarkdownReport::new("myfin 选股报告");
+    markdown.add_heading("候选清单", 2);
+    markdown.add_table(
+        &[
+            "标的",
+            "名称",
+            "行业",
+            "PE 分位",
+            "PB 分位",
+            "业绩拐点",
+            "3 个月动量",
+            "环境标签",
+            "入选理由",
+        ],
+        &candidate_table(&input.candidates),
+    );
+    markdown.add_heading("数据质量", 2);
+    let health_rows = input
+        .source_health
+        .iter()
+        .map(|line| {
+            vec![
+                line.source.clone(),
+                if line.ok { "通过" } else { "失败" }.to_string(),
+                line.latency_ms
+                    .map(|value| format!("{value} ms"))
+                    .unwrap_or_else(|| "—".to_string()),
+                line.error.clone().unwrap_or_else(|| "—".to_string()),
+            ]
+        })
+        .collect::<Vec<_>>();
+    markdown.add_table(&["数据源", "状态", "延迟", "错误"], &health_rows);
+    if input.source_health.is_empty() {
+        markdown.add_text("未提供数据源健康检查结果，本报告不将其视为通过。");
+    }
+    for note in &input.quality_notes {
+        markdown.add_text(note);
+    }
+    markdown.render()
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ReportInput {
+    pub candidates: Vec<Candidate>,
+    pub source_health: Vec<SourceHealthLine>,
+    pub quality_notes: Vec<String>,
+}
+
+/// 渲染月度截面回测报告，保留默认参数、逐年分层和敏感性网格。
+pub fn backtest_markdown(report: &BacktestReport) -> String {
+    let mut markdown = MarkdownReport::new("myfin 月度截面回测");
+    markdown.add_text(&format!(
+        "截面区间：{} 至 {}；固定持有 {} 个月；评估快照 {} 个；入选 {} 次。",
+        report
+            .start
+            .map(|date| date.to_string())
+            .unwrap_or_else(|| "无".to_string()),
+        report
+            .end
+            .map(|date| date.to_string())
+            .unwrap_or_else(|| "无".to_string()),
+        report.hold_months,
+        report.evaluated_snapshots,
+        report.selected
+    ));
+    markdown.add_heading("默认参数结果", 2);
+    markdown.add_table(
+        &["样本数", "平均收益", "中位数收益", "胜率"],
+        &[vec![
+            report.completed.count.to_string(),
+            format_stats(report.completed.mean_pct),
+            format_stats(report.completed.median_pct),
+            format_rate(report.completed.win_rate),
+        ]],
+    );
+    markdown.add_heading("按年份分层", 2);
+    let yearly = report
+        .yearly
+        .iter()
+        .map(|summary| {
+            vec![
+                summary.year.to_string(),
+                summary.selected.to_string(),
+                summary.completed.count.to_string(),
+                format_stats(summary.completed.mean_pct),
+                format_stats(summary.completed.median_pct),
+                format_rate(summary.completed.win_rate),
+            ]
+        })
+        .collect::<Vec<_>>();
+    markdown.add_table(
+        &["年份", "入选次数", "完成数", "平均收益", "中位数收益", "胜率"],
+        &yearly,
+    );
+    markdown.add_heading("敏感性网格", 2);
+    let sensitivity = report
+        .sensitivity
+        .iter()
+        .map(|cell| {
+            vec![
+                format!("{:.0}%", cell.percentile_max * 100.0),
+                cell.momentum_days.to_string(),
+                cell.ma_days.to_string(),
+                cell.selected.to_string(),
+                cell.completed.count.to_string(),
+                format_stats(cell.completed.mean_pct),
+                format_stats(cell.completed.median_pct),
+                format_rate(cell.completed.win_rate),
+            ]
+        })
+        .collect::<Vec<_>>();
+    markdown.add_table(
+        &[
+            "估值分位阈值",
+            "动量天数",
+            "均线天数",
+            "入选次数",
+            "完成数",
+            "平均收益",
+            "中位数收益",
+            "胜率",
+        ],
+        &sensitivity,
+    );
+    markdown.add_heading("数据质量说明", 2);
+    markdown.add_text(
+        "本报告使用统一 as-of 规则；财务披露日为免费数据源的近似值，\
+         退出日不足六个月的数据不计入完成收益。敏感性网格仅用于诊断，\
+         不会自动修改 config/screen.toml。",
+    );
+    markdown.render()
+}
+
+fn format_stats(value: Option<f64>) -> String {
+    value
+        .map(|value| format!("{value:.2}%"))
+        .unwrap_or_else(|| "—".to_string())
+}
+
+fn format_rate(value: Option<f64>) -> String {
+    value
+        .map(|value| format!("{:.1}%", value * 100.0))
+        .unwrap_or_else(|| "—".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renders_quality_page_without_health_data() {
+        let markdown = candidate_markdown(&ReportInput {
+            candidates: Vec::new(),
+            source_health: Vec::new(),
+            quality_notes: vec!["测试说明".to_string()],
+        });
+        assert!(markdown.contains("## 候选清单"));
+        assert!(markdown.contains("## 数据质量"));
+        assert!(markdown.contains("不将其视为通过"));
+        assert!(markdown.contains("测试说明"));
+    }
 }

@@ -1138,6 +1138,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "mf-backtest"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "mf-core",
+ "mf-screener",
+ "serde",
+]
+
+[[package]]
 name = "mf-core"
 version = "0.1.0"
 dependencies = [
@@ -1165,6 +1175,7 @@ dependencies = [
 name = "mf-report"
 version = "0.1.0"
 dependencies = [
+ "mf-backtest",
  "mf-core",
  "serde",
  "thiserror",
@@ -1201,6 +1212,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "mf-backtest",
  "mf-core",
  "mf-datasource",
  "mf-report",

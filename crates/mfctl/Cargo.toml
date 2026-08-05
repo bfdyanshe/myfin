@@ -13,6 +13,7 @@ mf-core = { workspace = true }
 mf-datasource = { workspace = true }
 mf-storage = { workspace = true }
 mf-screener = { workspace = true }
+mf-backtest = { workspace = true }
 mf-report = { workspace = true }
 anyhow.workspace = true
 chrono.workspace = true

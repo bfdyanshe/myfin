@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/mf-core", "crates/mf-datasource", "crates/mf-storage", "crates/mf-screener", "crates/mf-report", "crates/mfctl"]
+members = ["crates/mf-core", "crates/mf-datasource", "crates/mf-storage", "crates/mf-screener", "crates/mf-backtest", "crates/mf-report", "crates/mfctl"]
 
 [workspace.package]
 version = "0.1.0"
@@ -25,6 +25,7 @@ mf-core = { path = "crates/mf-core" }
 mf-datasource = { path = "crates/mf-datasource" }
 mf-storage = { path = "crates/mf-storage" }
 mf-screener = { path = "crates/mf-screener" }
+mf-backtest = { path = "crates/mf-backtest" }
 mf-report = { path = "crates/mf-report" }
 mfctl = { path = "crates/mfctl" }
 

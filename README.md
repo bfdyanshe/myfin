@@ -35,7 +35,7 @@ uv run --project py python -c "import pandas; print(pandas.__version__)"
 
 ## CLI 子命令
 
-状态与 crates/mfctl/src/main.rs 实际实现一致（`report`/`backtest` 仍为占位输出）。
+状态与 crates/mfctl/src/main.rs 实际实现一致。
 
 | 命令 | 用途 | 状态 |
 | --- | --- | --- |
@@ -43,19 +43,22 @@ uv run --project py python -c "import pandas; print(pandas.__version__)"
 | `sources check` | 健康检查（基准股探针） | M3（Python + Rust HTTP 已接入） |
 | `sync` | 增量同步单源单标的数据 | M3（默认按优先级链自动切换；也可指定单源） |
 | `screen` | 运行选股流水线 | M4（纯函数引擎 + 本地单标的数据组装） |
-| `report` | 生成 Markdown 报告 | M4/M5 |
+| `report` | 生成候选与数据质量 Markdown 报告 | M5（JSON 输入已接入） |
 | `doctor` | 数据目录健康审计 | 完成 |
 | `verify` | 跨源抽查对账 | M3 完成 |
+| `backtest` | 历史月度截面重建回测 | M4（JSON 输入 + Markdown 报告） |
 
 `verify` 读取本地 Parquet 中的同日多源记录，默认检查收盘价相对差异不超过 1%；
 需要先用不同源同步同一标的，数据不足两源时会明确失败。
-| `backtest` | 历史月度截面重建回测 | M4 |
 
 全局参数：`--registry <path>`（默认 `config/sources.toml`）、`--data-dir <path>`（默认 `$MYFIN_DATA` 或 `data/`）。
 
 `screen` 默认从本地 Parquet 读取日线、股本、复权因子、财务和业绩公告；
 若要提供全市场与行业估值样本，可使用 `--input <ScreenInput.json>` 传入完整筛选输入。
 缺少这些样本时，命令会输出明确的淘汰结果，不会把单标的历史序列冒充横截面样本。
+
+`backtest` 使用 `--input <HistoricalCandidate-array.json>` 读取带 as-of 横截面样本的历史候选输入，按每月最后交易日重建截面，
+统计六个月持有收益、年度分层和 18 格敏感性网格，报告默认写入 `data/reports/backtest-YYYYMMDD.md`。
 
 ## 数据源
 
@@ -109,9 +112,9 @@ myfin/
 
 - **M1 脚手架（完成）**：workspace、领域模型、注册表解析、数据目录、CLI 骨架、sources list/doctor、Python worker 与 3 个 SDK 适配器骨架、数据源维护 skill、全套文档。
 - **M2 存储层（完成）**：Parquet 数据层 + DuckDB 查询（SQLite 可选）、增量同步状态机。
-+ **M3 数据源适配器**：Rust HTTP 日线适配器、sources check、sync 故障切换与 verify 已完成。
-+ **M4 指标 + 筛选 + 回测**：指标与纯函数筛选引擎已接入；screen 数据组装、backtest 待做。
-- **M5 报告**：report（Markdown 报告含数据质量页）。
+- **M3 数据源适配器**：Rust HTTP 日线适配器、sources check、sync 故障切换与 verify 已完成。
+- **M4 指标 + 筛选 + 回测**：指标、筛选引擎与 JSON 输入回测已接入；全市场数据编排待补。
++ **M5 报告**：候选清单与数据质量 Markdown 报告已接入；环境 context 编排待做。
 - **M6 打磨**：性能、稳定性、文档完善。
 
 ## 已知限制
