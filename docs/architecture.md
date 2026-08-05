@@ -253,7 +253,7 @@ myfin/
 │   └── screen.yaml                   # 筛选参数
 ├── docs/                             # philosophy/strategy/architecture/data-sources + adr/
 ├── data/                             # 本地数据（gitignored）：market/ financial/ macro/ sync/ reports/ context/
-└── .opencode/skills/data-source-maintenance/   # 数据源维护 skill（随仓库分发）
+└── .agents/skills/data-source-maintenance/   # 数据源维护 skill（随仓库分发）
 ```
 
 ## 13. 常用命令

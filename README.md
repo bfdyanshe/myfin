@@ -53,7 +53,7 @@ cargo build                                          # 构建 mfctl（需 Rust 1
 | tushare | 行情校准/兜底（免费档） | `TUSHARE_TOKEN` | daily | earnings_notice: baostock → akshare |
 | akshare | 宏观/新闻辅助 | 无 | macro, earnings_notice | macro: akshare |
 
-注册表与优先级链由 AI 通过 config/sources.yaml + [.opencode/skills/data-source-maintenance/SKILL.md](.opencode/skills/data-source-maintenance/SKILL.md) 维护。
+注册表与优先级链由 AI 通过 config/sources.yaml + [.agents/skills/data-source-maintenance/SKILL.md](.agents/skills/data-source-maintenance/SKILL.md) 维护。
 
 ## 目录结构
 
@@ -75,7 +75,7 @@ myfin/
 │   └── screen.yaml                  # 选股参数（universe/低估/排除/回升）
 ├── docs/                            # philosophy/strategy/architecture/data-sources/adr 四篇 + 3 ADR
 ├── data/                            # 本地数据（gitignored）：market/{daily,adj_factor} financial macro sync reports context
-└── .opencode/skills/data-source-maintenance/   # AI 维护数据源的 skill（SKILL.md 已就位）
+└── .agents/skills/data-source-maintenance/   # AI 维护数据源的 skill（SKILL.md 已就位）
 ```
 
 ## 文档索引
@@ -86,7 +86,7 @@ myfin/
 - [docs/data-sources.md](docs/data-sources.md) —— 数据源手册：统一 schema、注册表、维护流程（AI 维护数据源的核心参考）。
 - [docs/adr/](docs/adr/) —— 架构决策记录：零成本数据、不复权+复权因子、回测先行。
 - [config/screen.yaml](config/screen.yaml) —— 选股流水线可调参数。
-- [.opencode/skills/data-source-maintenance/SKILL.md](.opencode/skills/data-source-maintenance/SKILL.md) —— AI 维护数据源的工作流（新增/停用/修复数据源、调整优先级链、故障切换）。
+- [.agents/skills/data-source-maintenance/SKILL.md](.agents/skills/data-source-maintenance/SKILL.md) —— AI 维护数据源的工作流（新增/停用/修复数据源、调整优先级链、故障切换）。
 
 ## 路线图
 

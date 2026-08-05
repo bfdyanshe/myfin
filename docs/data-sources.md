@@ -2,7 +2,7 @@
 
 > 状态：v1 · 本文件是 **AI 维护数据源的核心参考**。
 > 注册表配置：`config/sources.yaml`（本文一切数值以此为唯一事实来源）·
-> 维护技能：`.opencode/skills/data-source-maintenance/` · 入口命令：`mfctl sources list / check`。
+> 维护技能：`.agents/skills/data-source-maintenance/` · 入口命令：`mfctl sources list / check`。
 > 代码事实：`crates/mf-datasource/src/*.rs`（注册表结构）、`crates/mf-core/src/*.rs`（统一 schema）。
 
 ## 0. 设计原则

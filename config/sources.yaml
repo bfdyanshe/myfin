@@ -11,7 +11,7 @@
 #   4. 必要时更新 docs/data-sources.md 与对应适配器
 #
 # 完整规范见 docs/data-sources.md 与
-# .opencode/skills/data-source-maintenance/SKILL.md
+# .agents/skills/data-source-maintenance/SKILL.md
 # ============================================================
 
 version: 1
