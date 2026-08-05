@@ -16,5 +16,6 @@ mf-screener = { workspace = true }
 mf-report = { workspace = true }
 anyhow.workspace = true
 chrono.workspace = true
+serde_json.workspace = true
 clap = { version = "4", features = ["derive"] }
 tokio.workspace = true

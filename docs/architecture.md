@@ -232,8 +232,8 @@ flowchart LR
 | --- | --- | --- |
 | M1 | workspace 骨架、mf-core 领域模型、注册表、布局 + manifest、CLI 骨架、Python worker 三源、docs + skill | ✅ 完成（fd92776） |
 | M2 | 存储层：Parquet 写入 + DuckDB 查询引擎（SQLite 可选） | ✅ 完成 |
-| M3 | 数据源适配器（Rust HTTP 两源）、增量同步、`sources check`/`sync`/`verify` | 进行中：HTTP daily 已接入，verify 待做 |
-| M4 | 选股流水线 + as-of 模块 + 月度截面重建回测（`screen`/`backtest`） | 待做 |
+| M3 | 数据源适配器（Rust HTTP 两源）、增量同步、`sources check`/`sync`/`verify` | ✅ 完成 |
+| M4 | 选股流水线 + as-of 模块 + 月度截面重建回测（`screen`/`backtest`） | 进行中：指标与纯函数筛选引擎已接入 |
 | M5 | 报告完善（候选清单 + 数据质量页）、环境扫描 context 流程 | 待做 |
 | M6 | 硬化：熔断/重试打磨、质量门补全、文档收尾 | 待做 |
 

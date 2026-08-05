@@ -21,6 +21,7 @@ use clap::{Args, Parser, Subcommand};
 use mf_datasource::{
     http::HttpAdapter, Dataset, Registry, SourceConfig, SourceKind, DEFAULT_REGISTRY_PATH,
 };
+use mf_screener::{screen, ScreenInput, ScreenerConfig};
 use mf_storage::{
     Layout, ParquetStore, StagingManifest, SyncEntry, SyncManifest, SyncStatus,
 };
@@ -54,8 +55,8 @@ enum Command {
     },
     /// 增量同步一个源、数据集和标的
     Sync(SyncArgs),
-    /// 运行选股流水线（M4 实现）
-    Screen,
+    /// 运行选股流水线（M4）
+    Screen(ScreenArgs),
     /// 生成 Markdown 报告（M4/M5 实现）
     Report,
     /// 数据目录健康审计
@@ -91,7 +92,7 @@ fn main() -> Result<()> {
             SourcesAction::Check => cmd_sources_check(&registry, &cli.registry),
         },
         Command::Sync(args) => cmd_sync(&registry, &cli.registry, &layout, args),
-        Command::Screen => cmd_pending("screen", "选股流水线（M4 实现）"),
+        Command::Screen(args) => cmd_screen(&layout, args),
         Command::Report => cmd_pending("report", "Markdown 报告（M4/M5 实现）"),
         Command::Doctor => cmd_doctor(&layout),
         Command::Verify(args) => cmd_verify(&layout, args),
@@ -289,6 +290,25 @@ struct VerifyArgs {
     /// 收盘价允许的最大相对差异，默认 1%
     #[arg(long, default_value_t = 0.01)]
     max_relative_close_diff: f64,
+}
+
+#[derive(Args)]
+struct ScreenArgs {
+    /// 统一格式标的代码；使用 --input 时可省略
+    #[arg(long)]
+    symbol: Option<String>,
+
+    /// as-of 日期；省略时使用当前日期
+    #[arg(long)]
+    as_of: Option<String>,
+
+    /// 筛选配置文件
+    #[arg(long, default_value = "config/screen.toml")]
+    config: PathBuf,
+
+    /// 完整 ScreenInput JSON；用于提供全市场与行业估值样本
+    #[arg(long)]
+    input: Option<PathBuf>,
 }
 
 fn cmd_sync_single(
@@ -562,6 +582,59 @@ fn cmd_verify(layout: &Layout, args: VerifyArgs) -> Result<()> {
     if discrepancies > 0 {
         anyhow::bail!("跨源对账发现 {} 个异常日期", discrepancies);
     }
+    Ok(())
+}
+
+fn cmd_screen(layout: &Layout, args: ScreenArgs) -> Result<()> {
+    let config = ScreenerConfig::load(&args.config)
+        .with_context(|| format!("加载筛选配置 {} 失败", args.config.display()))?;
+    let input = if let Some(path) = args.input {
+        let raw = std::fs::read_to_string(&path)
+            .with_context(|| format!("读取筛选输入 {} 失败", path.display()))?;
+        serde_json::from_str::<ScreenInput>(&raw)
+            .with_context(|| format!("解析筛选输入 {} 失败", path.display()))?
+    } else {
+        let symbol = args
+            .symbol
+            .as_deref()
+            .context("未提供 --symbol；没有使用 --input 时必须指定标的")?;
+        let as_of = args
+            .as_of
+            .as_deref()
+            .map(|value| parse_cli_date(value, "as-of"))
+            .transpose()?
+            .unwrap_or_else(|| Utc::now().date_naive());
+        let store = ParquetStore::new(layout.clone());
+        ScreenInput {
+            symbol: symbol.to_string(),
+            name: None,
+            industry: None,
+            is_st: false,
+            as_of,
+            bars: store.query_daily_bars(symbol, None, Some(as_of))?,
+            price_vals: store.query_price_vals(symbol, None, Some(as_of))?,
+            adj_factors: store.query_adj_factors(symbol, Some(as_of))?,
+            financial: store.query_financial(symbol, as_of)?,
+            earnings: store.query_earnings_notices(symbol, as_of)?,
+            market_pe_samples: Vec::new(),
+            market_pb_samples: Vec::new(),
+            industry_pe_samples: Vec::new(),
+            industry_pb_samples: Vec::new(),
+        }
+    };
+    if let Some(symbol) = args.symbol {
+        if symbol != input.symbol {
+            anyhow::bail!("--symbol {} 与筛选输入中的 {} 不一致", symbol, input.symbol);
+        }
+    }
+    if let Some(as_of) = args.as_of {
+        let as_of = parse_cli_date(&as_of, "as-of")?;
+        if as_of != input.as_of {
+            anyhow::bail!("--as-of {} 与筛选输入中的 {} 不一致", as_of, input.as_of);
+        }
+    }
+    let result = screen(&input, &config);
+    println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
 }
 
