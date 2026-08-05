@@ -40,7 +40,7 @@ graph TD
 | --- | --- | --- |
 | `mf-core` | 领域模型与统一 schema，零依赖外部 crate（仅 serde/chrono/thiserror） | `DailyBar`/`AdjFactor`/`FinancialData`/`EarningsNotice`/`PriceVal`/`ValuationPoint`/`Symbol`/`Error` |
 | `mf-datasource` | 数据源抽象（`Source` trait）、注册表（`Registry`）、数据集与优先级链 | 加载并校验 `config/sources.toml` |
-| `mf-storage` | 数据目录布局（`Layout`）+ 增量同步状态机（`SyncManifest`） | Parquet/DuckDB 在 M2 引入 |
+| `mf-storage` | 数据目录布局、Parquet 接管、DuckDB 查询、增量同步状态机 | `Layout`/`ParquetStore`/`SyncManifest` |
 | `mf-screener` | 六阶段选股流水线（universe→…→output） | 参数来自 `config/screen.toml` |
 | `mf-report` | Markdown 报告渲染（`MarkdownReport`/`Candidate`） | 候选清单表格 + 数据质量页 |
 | `mfctl` | CLI 入口（`--registry`/`--data-dir` 全局参数 + 7 个子命令） | 见第 8 节 |
@@ -85,9 +85,9 @@ flowchart LR
 
 1. **源 → 适配器**：`config/sources.toml` 注册表声明每个源的能力（kind/lang/限流/探针）与数据集；
    适配器实现 `Source` trait（rust）或 worker 模块（python），产出符合 `mf-core` schema 的记录。
-2. **适配器 → staging Parquet**：全部记录落盘到 `data/` 对应目录（第 4 节），
-   按 `(dataset, source, trade_date)` 在 `data/sync/<dataset>.jsonl` 记一条 manifest 状态。
-3. **Parquet → 查询**（M2）：DuckDB 作为查询引擎做截面重建与分位计算；SQLite 可选用于小表。
+2. **适配器 → staging Parquet**：Python worker 按标的写入 staging Parquet，Rust 的 `ParquetStore::ingest_parquet`
+   校验并重新编码到 `data/` 对应目录；同步状态按 manifest 协议记录。
+3. **Parquet → 查询**（M2）：`mf-storage::ParquetStore` 使用 DuckDB 读取数据集，支持按年分区、幂等合并和日线查询；SQLite 可选用于小表。
 4. **流水线**：`mf-screener` 按 `config/screen.toml` 参数执行六阶段，产出候选清单。
 5. **报告**：`mf-report` 渲染 Markdown 到 `data/reports/`。
 
@@ -228,7 +228,7 @@ flowchart LR
 | 里程碑 | 内容 | 当前状态 |
 | --- | --- | --- |
 | M1 | workspace 骨架、mf-core 领域模型、注册表、布局 + manifest、CLI 骨架、Python worker 三源、docs + skill | ✅ 完成（fd92776） |
-| M2 | 存储层：Parquet 写入 + DuckDB 查询引擎（SQLite 可选） | 待做 |
+| M2 | 存储层：Parquet 写入 + DuckDB 查询引擎（SQLite 可选） | ✅ 完成 |
 | M3 | 数据源适配器（Rust HTTP 两源）、增量同步、`sources check`/`sync`/`verify` | 待做 |
 | M4 | 选股流水线 + as-of 模块 + 月度截面重建回测（`screen`/`backtest`） | 待做 |
 | M5 | 报告完善（候选清单 + 数据质量页）、环境扫描 context 流程 | 待做 |

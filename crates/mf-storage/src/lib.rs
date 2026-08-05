@@ -1,6 +1,6 @@
-//! mf-storage: 本地数据层（Parquet + DuckDB 将在 M2 引入）。
+//! mf-storage: 本地 Parquet 数据层与 DuckDB 查询引擎。
 //!
-//! M1 提供：数据目录布局约定 + 增量同步状态机（manifest）。
+//! M2 提供：按数据集分区的 Parquet 写入/接管、DuckDB 查询和增量同步状态机。
 //! 布局约定：
 //! ```text
 //! data/
@@ -14,7 +14,9 @@
 //! ```
 
 pub mod layout;
+pub mod parquet;
 pub mod sync;
 
 pub use layout::Layout;
+pub use parquet::{ParquetStore, StorageError};
 pub use sync::{SyncEntry, SyncManifest, SyncStatus};

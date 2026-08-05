@@ -1,7 +1,7 @@
 """Worker CLI: fetch data from Python-SDK sources into staging Parquet.
 
 IPC boundary with the Rust side (M3 orchestrator):
-  - worker only writes Parquet to `--out` plus one manifest line per run
+  - worker writes one symbol-scoped Parquet file to `--out` plus one manifest line per run
     (`<out>/manifest.jsonl`); Rust never calls into Python SDKs directly.
   - manifest line: {dataset, source, symbol, rows, status, updated_at}
 
@@ -63,11 +63,14 @@ def throttle(source: str, limits: dict[str, float]) -> None:
     _last_call[source] = time.monotonic()
 
 
-def write_parquet(df: pd.DataFrame, dataset: str, out: Path) -> Path:
-    """Atomic write: <out>/<dataset>/<symbol>.parquet.tmp -> .parquet."""
+def write_parquet(df: pd.DataFrame, dataset: str, out: Path, symbol: str) -> Path:
+    """Atomic write: one symbol per file, avoiding cross-symbol overwrite."""
     out.mkdir(parents=True, exist_ok=True)
-    final = out / f"{dataset}.parquet"
-    tmp = out / f"{dataset}.parquet.tmp"
+    safe_symbol = "".join(char if char.isalnum() or char in "_-" else "_" for char in symbol)
+    if not safe_symbol.strip("_-"):
+        raise ValueError(f"invalid symbol for parquet filename: {symbol!r}")
+    final = out / f"{safe_symbol}.parquet"
+    tmp = out / f".{safe_symbol}.parquet.tmp"
     to_arrow_table(df, dataset).write_parquet(str(tmp))
     os.replace(tmp, final)
     return final
@@ -125,7 +128,7 @@ def fetch_and_store(
         print(f"SKIP {source}/{dataset}/{symbol}: no rows ({time.perf_counter() - t0:.2f}s)", file=sys.stderr)
         return 0
 
-    final = write_parquet(df, dataset, out / dataset)
+    final = write_parquet(df, dataset, out / dataset, symbol)
     entry = {"dataset": dataset, "source": source, "symbol": symbol,
              "rows": rows, "status": "done", "updated_at": _dt.datetime.now(_dt.timezone.utc).isoformat()}
     append_manifest(out, entry)

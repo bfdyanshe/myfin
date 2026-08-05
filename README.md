@@ -16,7 +16,7 @@
 # 本地仓库（当前无远端，也可直接在该目录操作）
 git clone /Users/luozuojin/repo/myfin myfin && cd myfin
 
-cargo build                                          # 构建 mfctl（需 Rust 1.85+）
+cargo build                                          # 构建 mfctl（需 Rust 1.85+，包含 DuckDB/Parquet）
 ./target/debug/mfctl sources list                    # 数据源注册表与优先级链
 ./target/debug/mfctl doctor                          # 数据目录健康审计
 ./target/debug/mfctl screen                          # 选股流水线（M4 实现，当前未实现）
@@ -63,7 +63,7 @@ myfin/
 ├── crates/
 │   ├── mf-core/                      # 领域模型：bar/financial/symbol/valuation/error
 │   ├── mf-datasource/                # 数据源注册表：registry/source/dataset
-│   ├── mf-storage/                   # 数据目录布局：layout/sync
+│   ├── mf-storage/                   # 数据目录、Parquet/DuckDB：layout/parquet/sync
 │   ├── mf-screener/                  # 筛选流水线：config/stage
 │   ├── mf-report/                    # 报告生成（lib.rs）
 │   └── mfctl/                        # CLI 入口：src/main.rs
@@ -92,7 +92,7 @@ myfin/
 ## 路线图
 
 - **M1 脚手架（完成）**：workspace、领域模型、注册表解析、数据目录、CLI 骨架、sources list/doctor、Python worker 与 3 个 SDK 适配器骨架、数据源维护 skill、全套文档。
-- **M2 存储层**：Parquet 数据层 + DuckDB 查询（SQLite 可选）、增量同步状态机。
+- **M2 存储层（完成）**：Parquet 数据层 + DuckDB 查询（SQLite 可选）、增量同步状态机。
 - **M3 数据源适配器**：Rust HTTP 适配器（tencent/tushare）、sources check、sync、verify。
 - **M4 指标 + 筛选 + 回测**：估值分位、筛选流水线 screen、backtest。
 - **M5 报告**：report（Markdown 报告含数据质量页）。
