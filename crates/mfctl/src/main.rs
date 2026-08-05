@@ -201,10 +201,10 @@ fn cmd_sources_check(registry: &Registry, registry_path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 struct SyncArgs {
-    /// 源名称，必须存在于 config/sources.toml
-    #[arg(long)]
+    /// 源名称，或使用 auto 按数据集优先级链自动故障切换
+    #[arg(long, default_value = "auto")]
     source: String,
 
     /// 数据集名称，如 daily / financial
@@ -239,6 +239,40 @@ fn add_python_path(command: &mut ProcessCommand) {
 }
 
 fn cmd_sync(
+    registry: &Registry,
+    registry_path: &Path,
+    layout: &Layout,
+    args: SyncArgs,
+) -> Result<()> {
+    if args.source == "auto" {
+        let dataset = Dataset::from_str(&args.dataset)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+            .with_context(|| format!("未知数据集: {}", args.dataset))?;
+        let chain = registry
+            .chain(dataset)
+            .with_context(|| format!("数据集 {} 未配置优先级链", dataset))?;
+        let mut failures = Vec::new();
+        for source_name in &chain.order {
+            let mut candidate = args.clone();
+            candidate.source = source_name.clone();
+            match cmd_sync_single(registry, registry_path, layout, candidate) {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    println!("FAIL {:<12} {}", source_name, error);
+                    failures.push(format!("{source_name}: {error}"));
+                }
+            }
+        }
+        anyhow::bail!(
+            "数据集 {} 的优先级链全部失败: {}",
+            dataset,
+            failures.join("；")
+        );
+    }
+    cmd_sync_single(registry, registry_path, layout, args)
+}
+
+fn cmd_sync_single(
     registry: &Registry,
     registry_path: &Path,
     layout: &Layout,

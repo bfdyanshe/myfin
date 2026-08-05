@@ -86,6 +86,8 @@ def throttle(source: str, limits: dict[str, float]) -> None:
 
 def write_parquet(df: pd.DataFrame, dataset: str, out: Path, symbol: str) -> Path:
     """Atomic write: one symbol per file, avoiding cross-symbol overwrite."""
+    import pyarrow.parquet as parquet
+
     from myfin_py.schema import to_arrow_table
 
     out.mkdir(parents=True, exist_ok=True)
@@ -94,7 +96,7 @@ def write_parquet(df: pd.DataFrame, dataset: str, out: Path, symbol: str) -> Pat
         raise ValueError(f"invalid symbol for parquet filename: {symbol!r}")
     final = out / f"{safe_symbol}.parquet"
     tmp = out / f".{safe_symbol}.parquet.tmp"
-    to_arrow_table(df, dataset).write_parquet(str(tmp))
+    parquet.write_table(to_arrow_table(df, dataset), str(tmp))
     os.replace(tmp, final)
     return final
 

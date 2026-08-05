@@ -41,7 +41,7 @@ uv run --project py python -c "import pandas; print(pandas.__version__)"
 | --- | --- | --- |
 | `sources list` | 列出来源与优先级链 | 完成 |
 | `sources check` | 健康检查（基准股探针） | M3（Python + Rust HTTP 已接入） |
-| `sync` | 增量同步单源单标的数据 | M3（Python SDK + Rust HTTP daily 已接入） |
+| `sync` | 增量同步单源单标的数据 | M3（默认按优先级链自动切换；也可指定单源） |
 | `screen` | 运行选股流水线 | M4 |
 | `report` | 生成 Markdown 报告 | M4/M5 |
 | `doctor` | 数据目录健康审计 | 完成 |

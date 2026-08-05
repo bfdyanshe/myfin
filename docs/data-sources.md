@@ -200,6 +200,9 @@
 4. **更新适配器与本文档**：按新源/新字段同步适配器（python worker 或 Rust 原生），
    并更新 `docs/data-sources.md` 与本文件一致。
 
+`mfctl sync --source auto` 会按对应数据集的 `chains` 顺序逐源尝试；
+当前一个源失败时，失败信息保留在终端和 staging 目录，随后自动切换到下一个源。
+
 维护者还须遵守：字段名以 `mf-core` 为准（§3）；行情一律不复权；
 改链后跑 `sources list` 验证；新增源必须给出探针与限流配置。
 

@@ -272,6 +272,8 @@ cargo test
 ./target/debug/mfctl doctor                  # 数据目录健康审计
 ./target/debug/mfctl sync --source baostock --dataset daily --symbol 600519.SH \
     --start 2021-01-01 --end 2026-08-05        # Python SDK 单标的同步
+./target/debug/mfctl sync --source auto --dataset daily --symbol sh600519 \
+    --start 2021-01-01 --end 2026-08-05        # 按 daily 优先级链自动故障切换
 ./target/debug/mfctl screen                  # 选股流水线（M4 落地）
 ./target/debug/mfctl report                  # Markdown 报告（M5 落地）
 ./target/debug/mfctl verify                  # 跨源抽查对账（M3/M4 落地）
