@@ -8,6 +8,7 @@ not installed (health_check reports the missing dependency instead).
 from __future__ import annotations
 
 import datetime as _dt
+import importlib
 import time
 from typing import Optional
 
@@ -77,24 +78,39 @@ class BaseAdapter:
         raise NotImplementedError(f"{self.name}: macro not implemented")
 
 
-from myfin_py.sources import akshare_source, baostock_source, mootdx_source  # noqa: E402
-
-REGISTRY: dict = {
-    baostock_source.BaostockSource.name: baostock_source.BaostockSource,
-    akshare_source.AKShareSource.name: akshare_source.AKShareSource,
-    mootdx_source.MootdxSource.name: mootdx_source.MootdxSource,
+_ADAPTERS = {
+    "baostock": ("myfin_py.sources.baostock_source", "BaostockSource"),
+    "akshare": ("myfin_py.sources.akshare_source", "AKShareSource"),
+    "mootdx": ("myfin_py.sources.mootdx_source", "MootdxSource"),
 }
+
+REGISTRY: dict = {}
+IMPORT_ERRORS: dict[str, str] = {}
+for _name, (_module_name, _class_name) in _ADAPTERS.items():
+    try:
+        _module = importlib.import_module(_module_name)
+        REGISTRY[_name] = getattr(_module, _class_name)
+    except Exception as exc:  # noqa: BLE001 - health check reports dependency failures
+        IMPORT_ERRORS[_name] = f"Python adapter import failed: {exc}"
 
 
 def get_source(name: str) -> BaseAdapter:
     cls = REGISTRY.get(name)
     if cls is None:
+        if name in IMPORT_ERRORS:
+            raise SourceError(IMPORT_ERRORS[name], source=name)
         raise SourceError(f"unknown source {name!r}; registered: {sorted(REGISTRY)}")
     return cls()
 
 
 def list_sources() -> list:
-    return [
+    sources = [
         {"name": name, "package": cls.package, "datasets": cls().capabilities()}
         for name, cls in REGISTRY.items()
     ]
+    sources.extend(
+        {"name": name, "package": module, "datasets": [], "error": error}
+        for name, error in IMPORT_ERRORS.items()
+        for module, _class_name in [_ADAPTERS[name]]
+    )
+    return sources

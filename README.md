@@ -31,7 +31,7 @@ cargo build                                          # 构建 mfctl（需 Rust 1
 | 命令 | 用途 | 状态 |
 | --- | --- | --- |
 | `sources list` | 列出来源与优先级链 | 完成 |
-| `sources check` | 健康检查（基准股探针） | M3 |
+| `sources check` | 健康检查（基准股探针） | M3（Python 源已接入，HTTP 源待实现） |
 | `sync` | 增量同步行情/财务数据 | M3 |
 | `screen` | 运行选股流水线 | M4 |
 | `report` | 生成 Markdown 报告 | M4/M5 |

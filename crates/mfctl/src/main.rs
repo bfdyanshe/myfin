@@ -9,7 +9,8 @@
 //! - `verify`    跨源抽查对账（M3/M4）
 //! - `backtest`  历史月度截面重建回测（M4）
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command as ProcessCommand;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -80,7 +81,7 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Sources { action } => match action {
             SourcesAction::List => cmd_sources_list(&registry),
-            SourcesAction::Check => cmd_sources_check(&registry),
+            SourcesAction::Check => cmd_sources_check(&registry, &cli.registry),
         },
         Command::Sync => cmd_pending("sync", "增量同步数据（M3 实现）"),
         Command::Screen => cmd_pending("screen", "选股流水线（M4 实现）"),
@@ -112,10 +113,68 @@ fn kind_label(kind: SourceKind) -> &'static str {
     kind.label()
 }
 
-fn cmd_sources_check(_registry: &Registry) -> Result<()> {
-    // M3: 实例化全部适配器，逐源跑基准股探针，输出健康报告 + 交叉校验。
-    println!("健康检查将在 M3（数据源适配器落地）实现。当前注册表配置有效，共 {} 个源。", _registry.sources.len());
+fn cmd_sources_check(registry: &Registry, registry_path: &Path) -> Result<()> {
+    let mut failed = 0;
+    for source in &registry.sources {
+        match source.kind {
+            SourceKind::Http => {
+                println!(
+                    "FAIL {:<12} Rust HTTP 适配器尚未实现（注册表已登记）",
+                    source.name
+                );
+                failed += 1;
+            }
+            SourceKind::PythonSdk => {
+                let python = std::env::var_os("MYFIN_PYTHON")
+                    .unwrap_or_else(|| std::ffi::OsString::from("python"));
+                let mut command = ProcessCommand::new(python);
+                command.args([
+                    "-m",
+                    "myfin_py.worker",
+                    "--registry",
+                    &registry_path.to_string_lossy(),
+                    "health-check",
+                    "--source",
+                    &source.name,
+                ]);
+                add_python_path(&mut command);
+                match command.output() {
+                    Ok(output) => {
+                        print!("{}", String::from_utf8_lossy(&output.stdout));
+                        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+                        if !output.status.success() {
+                            failed += 1;
+                        }
+                    }
+                    Err(error) => {
+                        println!(
+                            "FAIL {:<12} 无法启动 Python worker: {error}",
+                            source.name
+                        );
+                        failed += 1;
+                    }
+                }
+            }
+        }
+    }
+    if failed > 0 {
+        anyhow::bail!("{} 个数据源健康检查未通过", failed);
+    }
     Ok(())
+}
+
+fn add_python_path(command: &mut ProcessCommand) {
+    let py_src = Path::new("py/src");
+    if !py_src.is_dir() {
+        return;
+    }
+    let mut paths = vec![py_src.to_path_buf()];
+    if let Some(existing) = std::env::var_os("PYTHONPATH") {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    if let Ok(joined) = std::env::join_paths(paths) {
+        command.env("PYTHONPATH", joined);
+    }
 }
 
 fn cmd_doctor(layout: &Layout) -> Result<()> {

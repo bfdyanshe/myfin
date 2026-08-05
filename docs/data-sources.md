@@ -192,8 +192,9 @@
    token 类鉴权声明 `env_var`，不写明文。
 2. **`mfctl sources list`**：确认 YAML 解析通过、`Registry::validate` 校验通过
    （版本必须为 1；python_sdk 必须有 `package`；链引用的源必须已定义）。
-3. **`mfctl sources check`**：对全部源跑基准股探针（`probe.symbol` + `lookback_days`），
-   输出健康报告（`HealthReport { source, ok, latency_ms, error }`），健康检查在 M3 落地。
+3. **`mfctl sources check`**：按注册表逐源跑基准股探针（`probe.symbol` + `lookback_days`），
+   输出健康报告（`HealthReport { source, ok, latency_ms, error }`）。Python 源已通过
+   worker 接入；Rust HTTP 源尚未实现时明确报告失败，不会静默通过。
 4. **更新适配器与本文档**：按新源/新字段同步适配器（python worker 或 Rust 原生），
    并更新 `docs/data-sources.md` 与本文件一致。
 

@@ -26,10 +26,14 @@ import tomllib
 from pathlib import Path
 from typing import Optional
 
-import pandas as pd
-
-from myfin_py.schema import to_arrow_table
-from myfin_py.sources import REGISTRY, BaseAdapter, SourceError, get_source, list_sources
+from myfin_py.sources import (
+    IMPORT_ERRORS,
+    REGISTRY,
+    BaseAdapter,
+    SourceError,
+    get_source,
+    list_sources,
+)
 
 MANIFEST_NAME = "manifest.jsonl"
 DATASETS = ("daily", "adj_factor", "financial", "earnings_notice")
@@ -52,6 +56,23 @@ def load_rate_limits(registry_path: str) -> dict[str, float]:
     return limits
 
 
+def load_probes(registry_path: str) -> dict[str, dict[str, int | str]]:
+    """Return configured probe values without making registry parsing mandatory."""
+    try:
+        with open(registry_path, "rb") as fh:
+            data = tomllib.load(fh)
+    except Exception:  # noqa: BLE001 - adapter checks still report their own status
+        return {}
+    probes = {}
+    for src in data.get("sources", []):
+        probe = src.get("probe") or {}
+        probes[src["name"]] = {
+            "symbol": str(probe.get("symbol", "")),
+            "lookback_days": int(probe.get("lookback_days", 5)),
+        }
+    return probes
+
+
 def throttle(source: str, limits: dict[str, float]) -> None:
     interval = limits.get(source, 0.0)
     if interval <= 0:
@@ -65,6 +86,8 @@ def throttle(source: str, limits: dict[str, float]) -> None:
 
 def write_parquet(df: pd.DataFrame, dataset: str, out: Path, symbol: str) -> Path:
     """Atomic write: one symbol per file, avoiding cross-symbol overwrite."""
+    from myfin_py.schema import to_arrow_table
+
     out.mkdir(parents=True, exist_ok=True)
     safe_symbol = "".join(char if char.isalnum() or char in "_-" else "_" for char in symbol)
     if not safe_symbol.strip("_-"):
@@ -136,6 +159,33 @@ def fetch_and_store(
     return 0
 
 
+def health_check(source: Optional[str] = None, registry_path: str = "config/sources.toml") -> int:
+    names = [source] if source else sorted(set(REGISTRY) | set(IMPORT_ERRORS))
+    probes = load_probes(registry_path)
+    failed = 0
+    for name in names:
+        if name in IMPORT_ERRORS:
+            print(f"FAIL {name:<12} {IMPORT_ERRORS[name]}")
+            failed += 1
+            continue
+        cls = REGISTRY.get(name)
+        if cls is None:
+            print(f"FAIL {name:<12} unknown Python adapter", file=sys.stderr)
+            failed += 1
+            continue
+        adapter = cls()
+        if probe := probes.get(name):
+            adapter.PROBE_SYMBOL = str(probe["symbol"])
+            adapter.PROBE_LOOKBACK_DAYS = int(probe["lookback_days"])
+        rep = adapter.health_check()
+        mark = "OK " if rep["ok"] else "FAIL"
+        if not rep["ok"]:
+            failed += 1
+        err = f" ({rep['error']})" if rep["error"] else ""
+        print(f"{mark} {name:<12} latency={rep['latency_ms']}ms{err}")
+    return 1 if failed else 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="myfin worker",
@@ -154,7 +204,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             p.add_argument("--start", default=None, help="YYYY-MM-DD (default: end - 5 years)")
             p.add_argument("--end", default=None, help="YYYY-MM-DD (default: today)")
 
-    sub.add_parser("health-check", help="probe all registered sources")
+    health = sub.add_parser("health-check", help="probe Python data sources")
+    health.add_argument("--source", default=None, help="only probe one adapter")
     sub.add_parser("list-sources", help="list registered adapters")
 
     args = parser.parse_args(argv)
@@ -166,15 +217,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
 
     if args.cmd == "health-check":
-        failed = 0
-        for name, cls in REGISTRY.items():
-            rep = cls().health_check()
-            mark = "OK " if rep["ok"] else "FAIL"
-            if not rep["ok"]:
-                failed += 1
-            err = f" ({rep['error']})" if rep["error"] else ""
-            print(f"{mark} {name:<12} latency={rep['latency_ms']}ms{err}")
-        return 1 if failed else 0
+        return health_check(args.source, args.registry)
 
     end = _dt.date.today().isoformat()
     start = ( _dt.date.today() - _dt.timedelta(days=5 * 365)).isoformat()
