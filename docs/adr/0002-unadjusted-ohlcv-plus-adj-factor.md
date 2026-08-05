@@ -3,7 +3,7 @@
 - 状态：已接受（v1）
 - 日期：2026-08
 - 相关：`crates/mf-core/src/bar.rs`、`docs/data-sources.md` §3.1–3.2、
-  `config/sources.yaml`（adj_factor 链）
+  `config/sources.toml`（adj_factor 链）
 
 ## 背景
 
@@ -16,7 +16,7 @@
 各源的除权除息数据不同（对分红送转的处理规则不同），导致同一只股票在不同源的
 「前复权」历史价格互相矛盾。若直接混存多源复权价：
 
-- 分位计算（5 年窗口，`config/screen.yaml` 的 `percentile_window_days: 1250`）
+- 分位计算（5 年窗口，`config/screen.toml` 的 `percentile_window_days = 1250`）
   会被历史价格口径差异污染，产生伪分位；
 - 增量同步时前复权价格会因新除权事件而**整体重算**，历史文件被迫重写，
   破坏「按年分文件、append 式增量」的存储设计。
@@ -29,7 +29,7 @@
 - `AdjFactor`：`(symbol, ex_date, cum_factor)`，`cum_factor` 为后复权累计因子，
   **后复权价格 = 不复权价格 × cum_factor**，`ex_date` 当日开始生效；
 - 所有分位/收益/动量计算在本地将不复权序列换算为**后复权**序列后执行；
-- 复权因子的唯一主源：Baostock（`config/sources.yaml` 的 `adj_factor` 链）；
+- 复权因子的唯一主源：Baostock（`config/sources.toml` 的 `adj_factor` 链）；
 - 任何适配器不得输出前复权价格入库（`Source` trait 契约，见 `crates/mf-datasource/src/source.rs`）。
 
 ## 备选方案对比

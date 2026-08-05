@@ -39,11 +39,11 @@ cargo build                                          # 构建 mfctl（需 Rust 1
 | `verify` | 跨源抽查对账 | M3/M4 |
 | `backtest` | 历史月度截面重建回测 | M4 |
 
-全局参数：`--registry <path>`（默认 `config/sources.yaml`）、`--data-dir <path>`（默认 `$MYFIN_DATA` 或 `data/`）。
+全局参数：`--registry <path>`（默认 `config/sources.toml`）、`--data-dir <path>`（默认 `$MYFIN_DATA` 或 `data/`）。
 
 ## 数据源
 
-与 config/sources.yaml 注册表一致（5 个源，全部免费）。Python SDK 适配器（baostock/akshare/mootdx）已在 py/src/myfin_py/ 就位；Rust HTTP 适配器（tencent/tushare）待 M3 落地。
+与 config/sources.toml 注册表一致（5 个源，全部免费）。Python SDK 适配器（baostock/akshare/mootdx）已在 py/src/myfin_py/ 就位；Rust HTTP 适配器（tencent/tushare）待 M3 落地。
 
 | 源 | 角色 | 鉴权 | 数据集 | 优先级链 |
 | --- | --- | --- | --- | --- |
@@ -53,7 +53,7 @@ cargo build                                          # 构建 mfctl（需 Rust 1
 | tushare | 行情校准/兜底（免费档） | `TUSHARE_TOKEN` | daily | earnings_notice: baostock → akshare |
 | akshare | 宏观/新闻辅助 | 无 | macro, earnings_notice | macro: akshare |
 
-注册表与优先级链由 AI 通过 config/sources.yaml + [.agents/skills/data-source-maintenance/SKILL.md](.agents/skills/data-source-maintenance/SKILL.md) 维护。
+注册表与优先级链由 AI 通过 config/sources.toml + [.agents/skills/data-source-maintenance/SKILL.md](.agents/skills/data-source-maintenance/SKILL.md) 维护。
 
 ## 目录结构
 
@@ -71,8 +71,8 @@ myfin/
 │   ├── pyproject.toml               # uv 管理（pandas/pyarrow/baostock/akshare/mootdx）
 │   └── src/myfin_py/                # worker.py（CLI）+ sources/（3 个 Python 适配器）
 ├── config/
-│   ├── sources.yaml                 # 数据源注册表（版本 1）
-│   └── screen.yaml                  # 选股参数（universe/低估/排除/回升）
+│   ├── sources.toml                 # 数据源注册表（版本 1）
+│   └── screen.toml                  # 选股参数（universe/低估/排除/回升）
 ├── docs/                            # philosophy/strategy/architecture/data-sources/adr 四篇 + 3 ADR
 ├── data/                            # 本地数据（gitignored）：market/{daily,adj_factor} financial macro sync reports context
 └── .agents/skills/data-source-maintenance/   # AI 维护数据源的 skill（SKILL.md 已就位）
@@ -85,7 +85,7 @@ myfin/
 - [docs/architecture.md](docs/architecture.md) —— 架构：crate 职责、数据流、IPC 边界、增量同步状态机、质量门。
 - [docs/data-sources.md](docs/data-sources.md) —— 数据源手册：统一 schema、注册表、维护流程（AI 维护数据源的核心参考）。
 - [docs/adr/](docs/adr/) —— 架构决策记录：零成本数据、不复权+复权因子、回测先行。
-- [config/screen.yaml](config/screen.yaml) —— 选股流水线可调参数。
+- [config/screen.toml](config/screen.toml) —— 选股流水线可调参数。
 - [.agents/skills/data-source-maintenance/SKILL.md](.agents/skills/data-source-maintenance/SKILL.md) —— AI 维护数据源的工作流（新增/停用/修复数据源、调整优先级链、故障切换）。
 
 ## 路线图
@@ -102,7 +102,7 @@ myfin/
 - Tushare 免费档无估值/财务数据（仅不复权日线），估值分位完全依赖本地自算。
 - 北向资金自 2024 年起停止披露持股数据，相关因子不可用。
 - 前复权统一由本地复权因子换算（baostock 为主源），不信任第三方前复权数据。
-- 免费数据源无公告日期：财务披露时点按「报告期末 + 约 60 天」近似（config/screen.yaml）。
+- 免费数据源无公告日期：财务披露时点按「报告期末 + 约 60 天」近似（config/screen.toml）。
 - MVP 排除北交所（上游数据源对 BJ 支持不稳定）。
 
 ## 免责声明

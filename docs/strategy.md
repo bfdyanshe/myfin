@@ -1,7 +1,7 @@
 # myfin 策略规格（可执行规范）
 
-> 状态：v1 · 参数定义：`config/screen.yaml`（本文件唯一参数来源，本文引用的是当前默认值）。
-> 理念背景：`docs/philosophy.md`。参数名与阈值以 `config/screen.yaml` 为准，本文为解释性规格。
+> 状态：v1 · 参数定义：`config/screen.toml`（本文件唯一参数来源，本文引用的是当前默认值）。
+> 理念背景：`docs/philosophy.md`。参数名与阈值以 `config/screen.toml` 为准，本文为解释性规格。
 
 ## 0. 总览
 
@@ -20,7 +20,7 @@ universe ──> environment ──> undervalued ──> exclude_bad ──> rec
 
 目标：剔除「不可能是策略对象」的股票，减少后续计算量并避免噪声。
 
-规则（对应 `config/screen.yaml` 的 `universe` 段）：
+规则（对应 `config/screen.toml` 的 `universe` 段）：
 
 | 规则 | 参数 | 当前值 | 说明 |
 | --- | --- | --- | --- |
@@ -168,13 +168,13 @@ universe ──> environment ──> undervalued ──> exclude_bad ──> rec
 | 动量窗口 | `momentum_days` ∈ {63, 126}（3/6 个月） | 63 |
 | 均线窗口 | `ma_days` ∈ {60, 120, 250} | 120 |
 
-- **参数先验固定，不事后调参**：默认值即为 `config/screen.yaml` 现值；
+- **参数先验固定，不事后调参**：默认值即为 `config/screen.toml` 现值；
   网格只回答「结果对参数是否敏感」，若最优值偏离默认值不回溯更改默认（防过拟合）。
 
 ### 8.4 防前视偏差（as-of 纪律）
 
 - 财务数据无公告日期，`ann_date` 按「报告期末 + 60 天」近似
-  （`as_of.ann_date_approx_days: 60`，Q1≈4-30、H1≈8-31、Q3≈10-31、年报≈次年 4-30）；
+  （`as_of.ann_date_approx_days = 60`，Q1≈4-30、H1≈8-31、Q3≈10-31、年报≈次年 4-30）；
 - 分位、动量、均线等所有因子一律以 as-of 日的可用数据计算；
 - 已知的 as-of 精度损失（公告日 ±60 天近似、业绩预告仅覆盖部分公司）须在报告的数据质量页声明。
 

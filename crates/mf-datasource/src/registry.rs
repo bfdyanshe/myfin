@@ -1,4 +1,4 @@
-//! 数据源注册表：加载 `config/sources.yaml` 并提供校验与优先级链解析。
+//! 数据源注册表：加载 `config/sources.toml` 并提供校验与优先级链解析。
 
 use std::collections::HashMap;
 use std::fs;
@@ -11,7 +11,7 @@ use mf_core::Error;
 use crate::dataset::Dataset;
 
 /// 注册表文件（相对于仓库根目录）。
-pub const DEFAULT_REGISTRY_PATH: &str = "config/sources.yaml";
+pub const DEFAULT_REGISTRY_PATH: &str = "config/sources.toml";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Registry {
@@ -98,7 +98,7 @@ pub enum RegistryError {
     #[error("注册表加载失败: {0}")]
     Io(#[from] std::io::Error),
     #[error("注册表解析失败: {0}")]
-    Parse(#[from] serde_yaml::Error),
+    Parse(#[from] toml::de::Error),
     #[error("注册表校验失败: {0}")]
     Validation(String),
 }
@@ -106,7 +106,7 @@ pub enum RegistryError {
 impl Registry {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, RegistryError> {
         let raw = fs::read_to_string(path)?;
-        let reg: Registry = serde_yaml::from_str(&raw)?;
+        let reg: Registry = toml::from_str(&raw)?;
         reg.validate()?;
         Ok(reg)
     }

@@ -10,7 +10,7 @@ Run from the repo root:
         --source baostock --symbol 600519.SH --start 2021-01-01 --out data/staging
 or after `uv sync` (editable install of py/):  python3 -m myfin_py.worker ...
 
-Rate limits come from config/sources.yaml (min_interval_ms per source);
+Rate limits come from config/sources.toml (min_interval_ms per source);
 a global per-source minimum interval is enforced in-process.
 """
 
@@ -22,6 +22,7 @@ import json
 import os
 import sys
 import time
+import tomllib
 from pathlib import Path
 from typing import Optional
 
@@ -30,24 +31,18 @@ import pandas as pd
 from myfin_py.schema import to_arrow_table
 from myfin_py.sources import REGISTRY, BaseAdapter, SourceError, get_source, list_sources
 
-try:
-    import yaml  # pyyaml (transitive via akshare; declared in pyproject)
-except Exception:  # pragma: no cover - fall back to no rate limiting
-    yaml = None
-
 MANIFEST_NAME = "manifest.jsonl"
 DATASETS = ("daily", "adj_factor", "financial", "earnings_notice")
 
-# per-source minimum call interval in seconds (from config/sources.yaml)
+# per-source minimum call interval in seconds (from config/sources.toml)
 _last_call: dict[str, float] = {}
 
 
 def load_rate_limits(registry_path: str) -> dict[str, float]:
     """Return {source_name: min_interval_seconds}; {} if unreadable."""
-    if yaml is None:
-        return {}
     try:
-        data = yaml.safe_load(Path(registry_path).read_text(encoding="utf-8"))
+        with open(registry_path, "rb") as fh:
+            data = tomllib.load(fh)
     except Exception:  # noqa: BLE001 - config problems must not block fetches
         return {}
     limits = {}
@@ -143,8 +138,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         prog="myfin worker",
         description="Fetch data from Python-SDK sources into staging Parquet (see py/src/myfin_py/worker.py).",
     )
-    parser.add_argument("--registry", default="config/sources.yaml",
-                        help="data-source registry path (rate limits; default config/sources.yaml)")
+    parser.add_argument("--registry", default="config/sources.toml",
+                        help="data-source registry path (rate limits; default config/sources.toml)")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     for dataset in DATASETS:

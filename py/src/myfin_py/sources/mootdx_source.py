@@ -76,7 +76,7 @@ class MootdxSource(BaseAdapter):
     name = "mootdx"
     package = "myfin_py.sources.mootdx_source"
     IMPORT_ERROR = IMPORT_ERROR
-    # config/sources.yaml declares price_val too; TDX quote parsing is
+    # config/sources.toml declares price_val too; TDX quote parsing is
     # pending (M3) so it stays out of capabilities until implemented.
     DATASETS = ["daily"]
     PROBE_SYMBOL = "600519"

@@ -24,7 +24,7 @@ class SourceError(RuntimeError):
 class BaseAdapter:
     """Common contract for all Python data-source adapters.
 
-    `capabilities()` follows config/sources.yaml. Any fetch method a source
+    `capabilities()` follows config/sources.toml. Any fetch method a source
     does not support raises NotImplementedError (the Rust side never calls
     it, since it only schedules datasets the source advertises).
     """

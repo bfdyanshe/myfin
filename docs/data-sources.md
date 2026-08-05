@@ -1,7 +1,7 @@
 # myfin 数据源手册
 
 > 状态：v1 · 本文件是 **AI 维护数据源的核心参考**。
-> 注册表配置：`config/sources.yaml`（本文一切数值以此为唯一事实来源）·
+> 注册表配置：`config/sources.toml`（本文一切数值以此为唯一事实来源）·
 > 维护技能：`.agents/skills/data-source-maintenance/` · 入口命令：`mfctl sources list / check`。
 > 代码事实：`crates/mf-datasource/src/*.rs`（注册表结构）、`crates/mf-core/src/*.rs`（统一 schema）。
 
@@ -13,12 +13,12 @@
    字段命名即 canonical schema（下文 §3）。
 4. **行情一律不复权**：存储不复权 OHLCV + 复权因子，本地换算后复权（`docs/adr/0002`），
    杜绝多源前复权口径不一致。
-5. **注册表即事实**：数据源能力、限流、探针、优先级链全部声明在 `config/sources.yaml`，
+5. **注册表即事实**：数据源能力、限流、探针、优先级链全部声明在 `config/sources.toml`，
    修改后必须通过 `Registry::validate` 校验（`mfctl sources list` 可验证解析）。
 6. **token 不入库**：任何 token 放 `config/tokens.yaml` 或环境变量（如 `TUSHARE_TOKEN`），
    `config/tokens.yaml` 已在 `.gitignore` 中。
 
-## 1. 数据源清单（来自 `config/sources.yaml`，5 个源）
+## 1. 数据源清单（来自 `config/sources.toml`，5 个源）
 
 | 源 | kind | lang | 鉴权 | min_interval | 上限 | backoff | 数据集 | 探针 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -33,7 +33,7 @@
 
 ### 1.1 baostock —— 财务/估值主源
 
-- `kind: python_sdk`，包 `myfin_py.sources.baostock_source`；匿名登录，显式 `bs.logout()`。
+- `kind = "python_sdk"`，包 `myfin_py.sources.baostock_source`；匿名登录，显式 `bs.logout()`。
 - 数据集：`daily, adj_factor, financial, earnings_notice, price_val`——**唯一**覆盖
   `adj_factor` 与 `financial` 的源，两条链都是它单源。
 - 口径要点（`notes` 字段）：
@@ -42,39 +42,39 @@
   - 财务字段映射到 `FinancialField`：`revenue/net_profit/equity/total_liabilities/oper_cash_flow/
     eps/bps/roe/gross_margin`；`net_profit` 取 `profit_net_ratio` 列；
   - 单连接非线程安全：worker 内串行 + 显式 `bs.logout()`。
-- 已知限制：不含北交所；财务无公告日期（`ann_date` 按报告期末 + 60 天近似，`config/screen.yaml`）。
+- 已知限制：不含北交所；财务无公告日期（`ann_date` 按报告期末 + 60 天近似，`config/screen.toml`）。
 
 ### 1.2 tencent —— 行情备源（HTTP 零鉴权）
 
-- `kind: http`（Rust 原生适配器）。`web.ifzq.gtimg.cn` 日 K（单次最多 640 根，需分页），
+- `kind = "http"`（Rust 原生适配器）。`web.ifzq.gtimg.cn` 日 K（单次最多 640 根，需分页），
   `qt.gtimg.cn` 实时快照（含 PE/PB/市值，**GBK 编码**需 iconv 解码）。无财务。
 - 口径要点：腾讯 `fqkline` 返回的是其自有前复权且仅限近 640 根，
   **本仓库一律取不复权段或仅用实时快照**；长期分位以 baostock 复权因子为准。
 
 ### 1.3 tushare —— 校准/兜底源（免费档 120 积分）
 
-- `kind: http`（Rust 原生适配器），token 鉴权，环境变量 `TUSHARE_TOKEN`。
+- `kind = "http"`（Rust 原生适配器），token 鉴权，环境变量 `TUSHARE_TOKEN`。
 - **免费档仅可用不复权日线 `daily` + 交易日历**；`daily_basic`/财务/复权均需 2000 积分
   （约 200 元/年），本仓库零成本方案不依赖（`docs/adr/0001`）。
-- 硬限流：`min_interval_ms: 1200`（实际限流 50 次/分钟、8000 次/天，注册表如实声明）。
+- 硬限流：`min_interval_ms = 1200`（实际限流 50 次/分钟、8000 次/天，注册表如实声明）。
 - 股票列表/交易日历等接口免费档不可用时，fallback 用 baostock/akshare。
 
 ### 1.4 akshare —— 宏观/新闻/辅助源
 
-- `kind: python_sdk`，包 `myfin_py.sources.akshare_source`。
+- `kind = "python_sdk"`，包 `myfin_py.sources.akshare_source`。
 - 数据集：`macro, earnings_notice`（辅助）。
 - 必须锁定 akshare 版本（pyproject 固定），接口改名频繁；东财系接口 5 秒间隔起
-  （注册表 `min_interval_ms: 5000`）避免 403/封 IP；宏观源优先国家统计局/央行。
+  （注册表 `min_interval_ms = 5000`）避免 403/封 IP；宏观源优先国家统计局/央行。
 
 ### 1.5 mootdx —— 行情主源（通达信 TCP）
 
-- `kind: python_sdk`，包 `myfin_py.sources.mootdx_source`。
+- `kind = "python_sdk"`，包 `myfin_py.sources.mootdx_source`。
 - 数据集：`daily, price_val`。依赖活跃 fork **mootdx-plus 0.12.0+**
   （已修北交所 920 号段市场映射）。
 - 上游公共服务器轮换/失联时按链 fallback 到 tencent/tushare；服务器列表需维护。
 - 复权需本地 xdxr 除权除息数据，暂不作 adj 主源。
 
-## 2. 优先级链（`config/sources.yaml` 的 `chains`）
+## 2. 优先级链（`config/sources.toml` 的 `chains`）
 
 | 数据集 | 链（越靠前越优先） | 说明 |
 | --- | --- | --- |
@@ -188,7 +188,7 @@
 
 ## 5. 数据源维护流程（AI 或人工）
 
-1. **修改注册表**：编辑 `config/sources.yaml`——新增源 / 调整优先级链 / 补字段映射（`notes`）；
+1. **修改注册表**：编辑 `config/sources.toml`——新增源 / 调整优先级链 / 补字段映射（`notes`）；
    token 类鉴权声明 `env_var`，不写明文。
 2. **`mfctl sources list`**：确认 YAML 解析通过、`Registry::validate` 校验通过
    （版本必须为 1；python_sdk 必须有 `package`；链引用的源必须已定义）。
@@ -204,7 +204,7 @@
 
 - **某源失效时如何改链**：以 tushare 失效为例——
   1. 先确认失效范围：`mfctl sources check`（M3 后可用）看探针是否通过；
-  2. 若为长期失效，编辑 `config/sources.yaml` 将对应数据集链中该源下移或移除
+  2. 若为长期失效，编辑 `config/sources.toml` 将对应数据集链中该源下移或移除
      （如 `daily: [tencent, tushare]` → `[tencent]`），保留配置以利恢复后改回；
   3. 不改适配器代码的情况下优先利用优先级链自动兜底；确实需要换源补数据时再改适配器；
   4. 每次改链后运行 `mfctl sources list` 与 `sources check` 验证。
@@ -213,7 +213,7 @@
   宕机期间缺口由 manifest 的 `failed` 状态记录，恢复后按 `missing_dates` 补拉。
 - **东财系反爬现状（2025 年起升级）**：akshare 中东财系接口间歇性 403/封 IP，
   故 akshare 只承担 macro 与 earnings_notice 辅助，不作主源；
-  调用间隔 5 秒起步（注册表 `min_interval_ms: 5000`），锁定版本防接口改名。
+  调用间隔 5 秒起步（注册表 `min_interval_ms = 5000`），锁定版本防接口改名。
 - **行情主源 mootdx 上游轮换**：通达信公共服务器列表需维护；
   连接失败按链 fallback 到 tencent，服务器恢复后 `sources check` 复测再回归。
 
@@ -224,5 +224,5 @@
 2. 北向资金日频数据 2024-08-19 起停止披露，不得作为信号（`docs/strategy.md` §9）。
 3. 乐咕 PE/PB 历史分位接口已停更，分位一律自算。
 4. 各源前复权口径互相不一致 → 统一不复权 + 复权因子（`docs/adr/0002`）。
-5. 财务数据无公告日期 → `ann_date` 按报告期末 + 60 天近似（`config/screen.yaml` 的
+5. 财务数据无公告日期 → `ann_date` 按报告期末 + 60 天近似（`config/screen.toml` 的
    `as_of.ann_date_approx_days`），as-of 精度损失需在报告数据质量页声明。

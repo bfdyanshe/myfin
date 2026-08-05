@@ -22,7 +22,7 @@ use mf_storage::Layout;
     name = "mfctl",
     version,
     about = "myfin 个人量化选股工具：当前低估且正在回升的标的",
-    long_about = "myfin — 个人量化选股。理念：当前低估但正在回升的标的，6 个月持有期，不做择时。\n数据源注册表与优先级链由 AI 通过 config/sources.yaml + skills 维护。"
+    long_about = "myfin — 个人量化选股。理念：当前低估但正在回升的标的，6 个月持有期，不做择时。\n数据源注册表与优先级链由 AI 通过 config/sources.toml + skills 维护。"
 )]
 struct Cli {
     /// 数据源注册表路径

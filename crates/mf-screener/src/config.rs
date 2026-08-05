@@ -1,4 +1,4 @@
-//! 选股参数配置（`config/screen.yaml`）。
+//! 选股参数配置（`config/screen.toml`）。
 
 use std::path::Path;
 
@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use mf_core::Error;
 
-pub const DEFAULT_SCREEN_CONFIG: &str = "config/screen.yaml";
+pub const DEFAULT_SCREEN_CONFIG: &str = "config/screen.toml";
 
 /// 流水线各阶段。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,7 +92,7 @@ impl ScreenerConfig {
         let path_ref = path.as_ref();
         let raw = std::fs::read_to_string(path_ref)
             .map_err(|e| Error::Config(format!("读取 {} 失败: {e}", path_ref.display())))?;
-        let cfg: ScreenerConfig = serde_yaml::from_str(&raw)
+        let cfg: ScreenerConfig = toml::from_str(&raw)
             .map_err(|e| Error::Config(format!("解析 {} 失败: {e}", path_ref.display())))?;
         cfg.validate()?;
         Ok(cfg)

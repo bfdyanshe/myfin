@@ -2,7 +2,7 @@
 
 - 状态：已接受（v1）
 - 日期：2026-08
-- 相关：`docs/data-sources.md`、`config/sources.yaml`、`docs/strategy.md` §3.1
+- 相关：`docs/data-sources.md`、`config/sources.toml`、`docs/strategy.md` §3.1
 
 ## 背景
 
@@ -25,7 +25,7 @@ AKShare 免费但依赖爬虫接口，稳定性差。
   市值 = 不复权收盘价 × 总股本；PE = 市值 / TTM 归母净利；PB = 市值 / 归母股东权益
   （口径见 `docs/strategy.md` §3.1，代码模型见 `crates/mf-core/src/valuation.rs`）。
 - 财务、预告/快报、复权因子主源：Baostock；行情主源：mootdx，备源腾讯财经，兜底 Tushare 免费档。
-- 不购买任何积分/数据服务，注册表内不出现付费源（`config/sources.yaml`）。
+- 不购买任何积分/数据服务，注册表内不出现付费源（`config/sources.toml`）。
 
 ## 备选方案对比
 

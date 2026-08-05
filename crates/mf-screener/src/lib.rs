@@ -1,4 +1,4 @@
-//! mf-screener: 选股流水线（策略规格见 docs/strategy.md，参数见 config/screen.yaml）。
+//! mf-screener: 选股流水线（策略规格见 docs/strategy.md，参数见 config/screen.toml）。
 //!
 //! 流水线各阶段（M4 实现）：
 //! ① universe   剔除 ST/退市风险/上市<1年/流动性不足（MVP 排除北交所）

@@ -2,7 +2,7 @@
 
 - 状态：已接受（v1）
 - 日期：2026-08
-- 相关：`docs/strategy.md` §8、`config/screen.yaml`、`crates/mfctl/src/main.rs`（`backtest` 子命令）
+- 相关：`docs/strategy.md` §8、`config/screen.toml`、`crates/mfctl/src/main.rs`（`backtest` 子命令）
 
 ## 背景
 
@@ -26,7 +26,7 @@
    暴露「收益集中在某一年」的问题；
 3. **敏感性网格**：分位阈值 {20%, 30%, 40%} × 动量窗口 {3, 6 个月} × 均线窗口 {60, 120, 250}
    报告结果稳定性；
-4. **参数先验固定，不事后调参**：默认参数即 `config/screen.yaml` 现值；
+4. **参数先验固定，不事后调参**：默认参数即 `config/screen.toml` 现值；
    网格只用于报告敏感性，网格中最优组合不回溯写入配置（防过拟合）；
 5. **as-of 纪律**：回测与实盘共用同一 as-of 模块（财务按 `ann_date` = 报告期末 + 60 天过滤，
    因子只用 as-of 日及之前数据），回测不得使用未来信息；

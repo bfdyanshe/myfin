@@ -39,9 +39,9 @@ graph TD
 | crate | 职责 | 关键内容 |
 | --- | --- | --- |
 | `mf-core` | 领域模型与统一 schema，零依赖外部 crate（仅 serde/chrono/thiserror） | `DailyBar`/`AdjFactor`/`FinancialData`/`EarningsNotice`/`PriceVal`/`ValuationPoint`/`Symbol`/`Error` |
-| `mf-datasource` | 数据源抽象（`Source` trait）、注册表（`Registry`）、数据集与优先级链 | 加载并校验 `config/sources.yaml` |
+| `mf-datasource` | 数据源抽象（`Source` trait）、注册表（`Registry`）、数据集与优先级链 | 加载并校验 `config/sources.toml` |
 | `mf-storage` | 数据目录布局（`Layout`）+ 增量同步状态机（`SyncManifest`） | Parquet/DuckDB 在 M2 引入 |
-| `mf-screener` | 六阶段选股流水线（universe→…→output） | 参数来自 `config/screen.yaml` |
+| `mf-screener` | 六阶段选股流水线（universe→…→output） | 参数来自 `config/screen.toml` |
 | `mf-report` | Markdown 报告渲染（`MarkdownReport`/`Candidate`） | 候选清单表格 + 数据质量页 |
 | `mfctl` | CLI 入口（`--registry`/`--data-dir` 全局参数 + 7 个子命令） | 见第 8 节 |
 
@@ -83,12 +83,12 @@ flowchart LR
 
 数据流逐级说明：
 
-1. **源 → 适配器**：`config/sources.yaml` 注册表声明每个源的能力（kind/lang/限流/探针）与数据集；
+1. **源 → 适配器**：`config/sources.toml` 注册表声明每个源的能力（kind/lang/限流/探针）与数据集；
    适配器实现 `Source` trait（rust）或 worker 模块（python），产出符合 `mf-core` schema 的记录。
 2. **适配器 → staging Parquet**：全部记录落盘到 `data/` 对应目录（第 4 节），
    按 `(dataset, source, trade_date)` 在 `data/sync/<dataset>.jsonl` 记一条 manifest 状态。
 3. **Parquet → 查询**（M2）：DuckDB 作为查询引擎做截面重建与分位计算；SQLite 可选用于小表。
-4. **流水线**：`mf-screener` 按 `config/screen.yaml` 参数执行六阶段，产出候选清单。
+4. **流水线**：`mf-screener` 按 `config/screen.toml` 参数执行六阶段，产出候选清单。
 5. **报告**：`mf-report` 渲染 Markdown 到 `data/reports/`。
 
 ## 4. 存储布局
@@ -136,11 +136,11 @@ data/
 
 ### 5.2 适配器注册
 
-- `config/sources.yaml` 中 `kind: python_sdk` 的源声明 `package` 字段
+- `config/sources.toml` 中 `kind = "python_sdk"` 的源声明 `package` 字段
   （如 `myfin_py.sources.baostock_source`），worker 侧模块路径与之一一对应；
   当前注册的 python 包路径：`myfin_py.sources.{baostock_source, akshare_source, mootdx_source}`
   （`py/src/myfin_py/sources/` 下，适配器代码 M3 落地）。
-- Rust 原生适配器（`kind: http`）为 tencent / tushare，直接内联于 Rust 侧。
+- Rust 原生适配器（`kind = "http"`）为 tencent / tushare，直接内联于 Rust 侧。
 
 ## 6. 增量同步状态机
 
@@ -176,7 +176,7 @@ flowchart LR
     F -- 否 --> H[failed 入 manifest]
 ```
 
-- **优先级链**：`config/sources.yaml` 的 `chains` 定义每个数据集的备源顺序
+- **优先级链**：`config/sources.toml` 的 `chains` 定义每个数据集的备源顺序
   （如 `daily: mootdx → tencent → tushare`），主源失败自动顺延，不需要人工介入。
 - **熔断**：某源连续失败达到阈值（实现中按 `max_calls_*` 与连续错误计数）后，
   当周期内不再直连该源，全部流量走备源；恢复窗口期用探针复测。
@@ -185,7 +185,7 @@ flowchart LR
 
 ## 8. CLI（mfctl）
 
-入口 `crates/mfctl/src/main.rs`，全局参数：`--registry`（默认 `config/sources.yaml`）、
+入口 `crates/mfctl/src/main.rs`，全局参数：`--registry`（默认 `config/sources.toml`）、
 `--data-dir`（默认 `$MYFIN_DATA` 或 `data/`）。
 
 | 子命令 | 说明 | 实现状态 |
@@ -205,7 +205,7 @@ flowchart LR
 
 所有因子计算的时点纪律（防前视偏差，规格见 `docs/strategy.md` §8.4）：
 
-- 配置：`as_of.ann_date_approx_days: 60`（`config/screen.yaml`）；
+- 配置：`as_of.ann_date_approx_days = 60`（`config/screen.toml`）；
 - 财务数据按 `ann_date`（报告期末 + 60 天近似）过滤，只有 `ann_date <= as_of` 的快照可被使用；
 - 分位/动量/均线等时间窗因子一律以 as-of 日收盘为窗口末端；
 - 该模块由 `mf-screener` 在 M4 实现，回测与实盘共用同一 as-of 逻辑，杜绝「回测能用未来数据」。
@@ -243,14 +243,14 @@ myfin/
 │   ├── mf-core/                      # 领域模型与统一 schema（bar/financial/symbol/valuation/error）
 │   ├── mf-datasource/                # 数据源注册表解析（registry.rs）、Source trait、优先级链
 │   ├── mf-storage/                   # 数据目录布局 + 增量同步状态机（manifest）
-│   ├── mf-screener/                  # 选股流水线配置（config.rs，对应 config/screen.yaml）
+│   ├── mf-screener/                  # 选股流水线配置（config.rs，对应 config/screen.toml）
 │   ├── mf-report/                    # Markdown 报告渲染器
 │   └── mfctl/                        # CLI 入口（main.rs）
 ├── py/src/myfin_py/                  # Python worker：sources/（baostock/akshare/mootdx）
 │                                     # schema.py（统一 schema）+ worker.py（CLI，写 staging Parquet + manifest）
 ├── config/
-│   ├── sources.yaml                  # 数据源注册表（AI 维护）
-│   └── screen.yaml                   # 筛选参数
+│   ├── sources.toml                  # 数据源注册表（AI 维护）
+│   └── screen.toml                   # 筛选参数
 ├── docs/                             # philosophy/strategy/architecture/data-sources + adr/
 ├── data/                             # 本地数据（gitignored）：market/ financial/ macro/ sync/ reports/ context/
 └── .agents/skills/data-source-maintenance/   # 数据源维护 skill（随仓库分发）
