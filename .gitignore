@@ -1,0 +1,31 @@
+# Rust
+target/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Node (future)
+node_modules/
+dist/
+
+# Data (local, regenerable)
+data/market/
+data/financial/
+data/macro/
+data/sync/
+data/reports/
+data/context/
+data/*.sqlite
+data/*.db
+
+# Secrets — NEVER commit tokens/keys
+config/tokens.yaml
+config/tokens.yaml.example
+.env
+*.local
+
+# OS
+.DS_Store

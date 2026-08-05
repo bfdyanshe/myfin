@@ -1,0 +1,175 @@
+# ============================================================
+# myfin 数据源注册表
+# ============================================================
+# 本文件是「AI 维护数据源」的核心：所有数据源的能力、限流、
+# 鉴权、健康检查探针与优先级链都定义在这里。
+#
+# 维护流程（AI 或人工）：
+#   1. 修改本文件（新增源 / 调整链 / 补字段映射）
+#   2. 运行 `mfctl sources list`   — 确认解析通过
+#   3. 运行 `mfctl sources check`  — 健康检查（M3 落地）
+#   4. 必要时更新 docs/data-sources.md 与对应适配器
+#
+# 完整规范见 docs/data-sources.md 与
+# .opencode/skills/data-source-maintenance/SKILL.md
+# ============================================================
+
+version: 1
+
+sources:
+  # ----------------------------------------------------------
+  # 1. Baostock —— 财务/估值主源（免费、零注册、稳定）
+  #    Python SDK。季频财务 2007+、业绩预告 2003+、快报 2006+、
+  #    复权因子、日 K（1990+）。不含北交所；匿名登录，有限频。
+  #    财务无公告日期 → ann_date 按报告期末 + ~2 个月近似（screen.yaml）。
+  # ----------------------------------------------------------
+  - name: baostock
+    description: A股历史日K、季频财务、业绩预告/快报、复权因子（财务主源）
+    kind: python_sdk
+    lang: python
+    package: myfin_py.sources.baostock_source
+    auth:
+      type: none
+    rate_limit:
+      min_interval_ms: 300
+      max_calls_per_minute: null
+      max_calls_per_day: null
+      backoff_ms: 30000
+    datasets: [daily, adj_factor, financial, earnings_notice, price_val]
+    probe:
+      symbol: sh.600519
+      lookback_days: 5
+    notes: |
+      复权因子接口给出后复权累计因子（adjustflag=3），作为 adj_factor 唯一主源。
+      daily 输出不复权（adjustflag=3），由存储层本地换算后复权。
+      财务字段映射: revenue/net_profit/equity/total_liabilities/oper_cash_flow/
+      eps/bps/roe/gross_margin → FinancialField。net_profit 取自 profit_net_ratio 列。
+      单连接非线程安全：worker 内串行 + 显式 bs.logout()。
+
+  # ----------------------------------------------------------
+  # 2. 腾讯财经 —— 行情备源（HTTP，零鉴权，低封IP风险）
+  #    Rust 原生适配器。web.ifzq.gtimg.cn 日K（单次最多 640 根，需分页），
+  #    qt.gtimg.cn 实时快照（含 PE/PB/市值，GBK 编码）。无财务。
+  # ----------------------------------------------------------
+  - name: tencent
+    description: A股日K（不复权）与实时估值快照，行情备源
+    kind: http
+    lang: rust
+    auth:
+      type: none
+    rate_limit:
+      min_interval_ms: 500
+      max_calls_per_minute: null
+      max_calls_per_day: null
+      backoff_ms: 15000
+    datasets: [daily, price_val]
+    probe:
+      symbol: sh600519
+      lookback_days: 5
+    notes: |
+      行情用 fqkline 接口时注意：腾讯返回的是其自有前复权且仅限近 640 根，
+      本仓库一律取不复权段（fqkline 参数不含复权时）或仅用于实时快照；
+      长期分位计算以 baostock 复权因子为准。
+      GBK 解码（iconv）后才能解析文本行情。
+
+  # ----------------------------------------------------------
+  # 3. Tushare —— 校准/兜底源（免费档 120 积分）
+  #    Rust 原生适配器。免费档仅可用不复权日线 daily + 交易日历；
+  #    daily_basic/财务/复权均需 2000 积分，本仓库零成本方案不依赖。
+  #    限流：50 次/分钟、8000 次/天（免费档硬上限）。
+  # ----------------------------------------------------------
+  - name: tushare
+    description: A股不复权日线（免费档），行情校准/兜底源
+    kind: http
+    lang: rust
+    auth:
+      type: token
+      env_var: TUSHARE_TOKEN
+    rate_limit:
+      min_interval_ms: 1200
+      max_calls_per_minute: 50
+      max_calls_per_day: 8000
+      backoff_ms: 60000
+    datasets: [daily]
+    probe:
+      symbol: "600519.SH"
+      lookback_days: 5
+    notes: |
+      免费档积分权限: 仅 non-adj daily 可用；stock_basic/trade_cal 亦需更高积分，
+      股票列表 fallback 用 baostock/akshare。token 放 config/tokens.yaml 或环境变量，
+      禁止硬编码/入库。
+
+  # ----------------------------------------------------------
+  # 4. AKShare —— 宏观/新闻/辅助源（Python 库，聚合爬虫）
+  #    覆盖最广但东财系接口间歇性失效（2025 年起反爬升级），
+  #    仅用于宏观（官方源）与新闻/一致预期等辅助数据，不作主源。
+  # ----------------------------------------------------------
+  - name: akshare
+    description: 宏观指标（官方源）、新闻、业绩预告等辅助数据
+    kind: python_sdk
+    lang: python
+    package: myfin_py.sources.akshare_source
+    auth:
+      type: none
+    rate_limit:
+      min_interval_ms: 5000
+      max_calls_per_minute: null
+      max_calls_per_day: null
+      backoff_ms: 120000
+    datasets: [macro, earnings_notice]
+    probe:
+      symbol: ""
+      lookback_days: 0
+    notes: |
+      必须锁定 akshare 版本（pyproject 固定），接口改名频繁；
+      东财系接口 5 秒间隔起，避免 403/封 IP。宏观源优先国家统计局/央行。
+
+  # ----------------------------------------------------------
+  # 5. mootdx —— 行情主源（通达信 TCP，零鉴权，不封 IP）
+  #    Python SDK。计划主源；依赖活跃 fork（mootdx-plus 0.12.0+，
+  #    已修北交所 920 号段市场映射）。上游公共服务器轮换/失联时
+  #    自动切腾讯/东财。复权需本地 xdxr 除权除息数据，暂不作 adj 主源。
+  # ----------------------------------------------------------
+  - name: mootdx
+    description: 通达信 TCP 实时行情与历史日K，行情主源
+    kind: python_sdk
+    lang: python
+    package: myfin_py.sources.mootdx_source
+    auth:
+      type: none
+    rate_limit:
+      min_interval_ms: 100
+      max_calls_per_minute: null
+      max_calls_per_day: null
+      backoff_ms: 10000
+    datasets: [daily, price_val]
+    probe:
+      symbol: "600519"
+      lookback_days: 5
+    notes: |
+      MVP universe 排除北交所（上游对 BJ 支持不稳定）。
+      服务器列表需维护；连接失败时按链 fallback 到 tencent/tushare。
+
+# ------------------------------------------------------------
+# 优先级链：数据集 -> 源（越靠前越优先，多源用于自动兜底）
+# 原则：主源必须稳定（零鉴权/低封IP）；爬虫类（东财）仅兜底。
+# ------------------------------------------------------------
+chains:
+  daily:
+    dataset: daily
+    order: [mootdx, tencent, tushare]
+  adj_factor:
+    dataset: adj_factor
+    order: [baostock]
+  financial:
+    dataset: financial
+    order: [baostock]
+  earnings_notice:
+    dataset: earnings_notice
+    order: [baostock, akshare]
+  price_val:
+    dataset: price_val
+    order: [mootdx, tencent]
+  macro:
+    dataset: macro
+    order: [akshare]

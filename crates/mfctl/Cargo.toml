@@ -1,0 +1,18 @@
+[package]
+name = "mfctl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "mfctl"
+path = "src/main.rs"
+
+[dependencies]
+mf-core = { workspace = true }
+mf-datasource = { workspace = true }
+mf-storage = { workspace = true }
+mf-screener = { workspace = true }
+mf-report = { workspace = true }
+anyhow.workspace = true
+clap = { version = "4", features = ["derive"] }

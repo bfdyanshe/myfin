@@ -1,0 +1,13 @@
+[package]
+name = "mf-report"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mf-core = { workspace = true }
+serde.workspace = true
+thiserror.workspace = true
+
+[lib]
+name = "mf_report"
