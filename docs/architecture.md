@@ -227,9 +227,58 @@ flowchart LR
 
 | 里程碑 | 内容 | 当前状态 |
 | --- | --- | --- |
-| M1 | workspace 骨架、mf-core 领域模型、注册表、布局 + manifest、CLI 骨架 | ✅ 完成 |
-| M2 | 存储层：Parquet 写入 + DuckDB 查询引擎（SQLite 可选） | 计划中 |
-| M3 | 数据源适配器（python worker 三源 + rust 两源）、增量同步、`sources check`/`verify` | 计划中 |
-| M4 | 选股流水线 + as-of 模块 + 月度截面重建回测 | 计划中 |
-| M5 | 报告完善（候选清单 + 数据质量页）、环境扫描 context 流程 | 计划中 |
-| M6 | 硬化：熔断/重试打磨、质量门补全、文档收尾 | 计划中 |
+| M1 | workspace 骨架、mf-core 领域模型、注册表、布局 + manifest、CLI 骨架、Python worker 三源、docs + skill | ✅ 完成（fd92776） |
+| M2 | 存储层：Parquet 写入 + DuckDB 查询引擎（SQLite 可选） | 待做 |
+| M3 | 数据源适配器（Rust HTTP 两源）、增量同步、`sources check`/`sync`/`verify` | 待做 |
+| M4 | 选股流水线 + as-of 模块 + 月度截面重建回测（`screen`/`backtest`） | 待做 |
+| M5 | 报告完善（候选清单 + 数据质量页）、环境扫描 context 流程 | 待做 |
+| M6 | 硬化：熔断/重试打磨、质量门补全、文档收尾 | 待做 |
+
+## 12. 仓库布局
+
+```
+myfin/
+├── Cargo.toml                        # workspace（6 crates）
+├── crates/
+│   ├── mf-core/                      # 领域模型与统一 schema（bar/financial/symbol/valuation/error）
+│   ├── mf-datasource/                # 数据源注册表解析（registry.rs）、Source trait、优先级链
+│   ├── mf-storage/                   # 数据目录布局 + 增量同步状态机（manifest）
+│   ├── mf-screener/                  # 选股流水线配置（config.rs，对应 config/screen.yaml）
+│   ├── mf-report/                    # Markdown 报告渲染器
+│   └── mfctl/                        # CLI 入口（main.rs）
+├── py/src/myfin_py/                  # Python worker：sources/（baostock/akshare/mootdx）
+│                                     # schema.py（统一 schema）+ worker.py（CLI，写 staging Parquet + manifest）
+├── config/
+│   ├── sources.yaml                  # 数据源注册表（AI 维护）
+│   └── screen.yaml                   # 筛选参数
+├── docs/                             # philosophy/strategy/architecture/data-sources + adr/
+├── data/                             # 本地数据（gitignored）：market/ financial/ macro/ sync/ reports/ context/
+└── .opencode/skills/data-source-maintenance/   # 数据源维护 skill（随仓库分发）
+```
+
+## 13. 常用命令
+
+```bash
+# Rust 构建与测试
+cargo build
+cargo test
+
+# mfctl CLI（工作目录为仓库根）
+./target/debug/mfctl sources list            # 注册表与优先级链
+./target/debug/mfctl sources check           # 源健康检查（M3 落地）
+./target/debug/mfctl doctor                  # 数据目录健康审计
+./target/debug/mfctl sync                    # 增量同步（M3 落地）
+./target/debug/mfctl screen                  # 选股流水线（M4 落地）
+./target/debug/mfctl report                  # Markdown 报告（M5 落地）
+./target/debug/mfctl verify                  # 跨源抽查对账（M3/M4 落地）
+./target/debug/mfctl backtest                # 历史月度截面回测（M4 落地）
+
+# Python worker（Python SDK 独占源）
+PYTHONPATH=py/src python3 -m myfin_py.worker list-sources
+PYTHONPATH=py/src python3 -m myfin_py.worker health-check
+PYTHONPATH=py/src python3 -m myfin_py.worker fetch-daily \
+    --source baostock --symbol 600519.SH --start 2021-01-01 --end 2026-08-05 --out data/staging
+
+# 新 py 文件提交前校验
+python3 -m py_compile <file>
+```
