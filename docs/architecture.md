@@ -85,8 +85,9 @@ flowchart LR
 
 1. **源 → 适配器**：`config/sources.toml` 注册表声明每个源的能力（kind/lang/限流/探针）与数据集；
    适配器实现 `Source` trait（rust）或 worker 模块（python），产出符合 `mf-core` schema 的记录。
-2. **适配器 → staging Parquet**：Python worker 按标的写入 staging Parquet，Rust 的 `ParquetStore::ingest_parquet`
-   校验并重新编码到 `data/` 对应目录；同步状态按 manifest 协议记录。
+2. **适配器 → staging Parquet**：Python worker 按标的写入 staging Parquet，`mfctl sync` 校验
+   staging manifest，只接管 `done` 记录，再由 `ParquetStore::ingest_parquet_by_year`
+   重新编码到 `data/` 对应目录；同步状态写入落库 manifest。
 3. **Parquet → 查询**（M2）：`mf-storage::ParquetStore` 使用 DuckDB 读取数据集，支持按年分区、幂等合并和日线查询；SQLite 可选用于小表。
 4. **流水线**：`mf-screener` 按 `config/screen.toml` 参数执行六阶段，产出候选清单。
 5. **报告**：`mf-report` 渲染 Markdown 到 `data/reports/`。
@@ -120,10 +121,12 @@ data/
 
 ### 5.1 协议
 
-- **无 RPC**：Python worker 不向 Rust 进程实时通信，唯一的交接点是**文件**——
-  worker 写 staging Parquet 并在 manifest（`data/sync/*.jsonl`）追加同步状态；
-  Rust 侧（`mfctl sync` 编排、`mfctl doctor`/`verify` 校验）读取 manifest 与数据文件。
-- **manifest 协议**：`data/sync/<dataset>.jsonl` 每行一个 `SyncEntry` JSON
+- **无 RPC**：Python worker 不向 Rust 进程实时通信，唯一的交接点是**文件**。
+- **staging manifest**：worker 在每次运行的 staging 目录写入 `manifest.jsonl`，
+  每行一个 `StagingEntry`，键为 `(dataset, source, symbol)`，由
+  `crates/mf-storage/src/staging.rs` 严格解析。
+- **落库 manifest**：`mfctl sync` 仅接管 `done` staging 记录，并在
+  `data/sync/<dataset>.jsonl` 追加按日期聚合的 `SyncEntry` JSON
   （`crates/mf-storage/src/sync.rs`）：
 
 ```json
@@ -191,8 +194,8 @@ flowchart LR
 | 子命令 | 说明 | 实现状态 |
 | --- | --- | --- |
 | `sources list` | 列出注册表源与优先级链 | ✅ M1 已实现 |
-| `sources check` | 全源健康检查（基准股探针） | 骨架已建，M3 落地 |
-| `sync` | 增量同步行情/财务数据 | M3 实现 |
+| `sources check` | 全源健康检查（基准股探针） | M3：Python 源已接入，HTTP 源待实现 |
+| `sync` | 增量同步单源单标的数据 | M3：Python SDK 已接入 |
 | `screen` | 运行选股流水线 | M4 实现 |
 | `report` | 生成 Markdown 报告 | M4/M5 实现 |
 | `doctor` | 数据目录健康审计（目录统计） | ✅ M1 已实现 |
@@ -267,7 +270,8 @@ cargo test
 ./target/debug/mfctl sources list            # 注册表与优先级链
 ./target/debug/mfctl sources check           # 源健康检查（M3 落地）
 ./target/debug/mfctl doctor                  # 数据目录健康审计
-./target/debug/mfctl sync                    # 增量同步（M3 落地）
+./target/debug/mfctl sync --source baostock --dataset daily --symbol 600519.SH \
+    --start 2021-01-01 --end 2026-08-05        # Python SDK 单标的同步
 ./target/debug/mfctl screen                  # 选股流水线（M4 落地）
 ./target/debug/mfctl report                  # Markdown 报告（M5 落地）
 ./target/debug/mfctl verify                  # 跨源抽查对账（M3/M4 落地）

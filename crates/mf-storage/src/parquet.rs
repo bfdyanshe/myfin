@@ -69,15 +69,78 @@ impl ParquetStore {
                 staging.display()
             )));
         }
-        let dir = self.partition_dir(dataset, partition)?;
-        fs::create_dir_all(&dir)?;
-        let file_stem = safe_component(file_stem)?;
-        let target = dir.join(format!("{file_stem}.parquet"));
-        let temporary = temporary_path(&target);
         let source = sql_literal(staging);
         let connection = Connection::open_in_memory()?;
         validate_schema(&connection, dataset, &source)?;
-        let query = format!("SELECT * FROM read_parquet({source})");
+        let relation = format!("read_parquet({source})");
+        self.ingest_relation(&connection, dataset, partition, file_stem, &relation)
+    }
+
+    /// 按数据集的日期字段拆分 staging 文件，并将每个年份幂等接管到数据目录。
+    pub fn ingest_parquet_by_year(
+        &self,
+        dataset: Dataset,
+        file_stem: &str,
+        staging: &Path,
+    ) -> Result<Vec<PathBuf>> {
+        if !staging.is_file() {
+            return Err(StorageError::Invalid(format!(
+                "staging 文件不存在: {}",
+                staging.display()
+            )));
+        }
+        let source = sql_literal(staging);
+        let connection = Connection::open_in_memory()?;
+        validate_schema(&connection, dataset, &source)?;
+        let Some(date_column) = partition_column(dataset) else {
+            return Ok(vec![self.ingest_relation(
+                &connection,
+                dataset,
+                "all",
+                file_stem,
+                &format!("read_parquet({source})"),
+            )?]);
+        };
+        let year_sql = format!(
+            "SELECT DISTINCT year({date_column}) FROM read_parquet({source}) \
+             WHERE {date_column} IS NOT NULL ORDER BY 1"
+        );
+        let mut statement = connection.prepare(&year_sql)?;
+        let years = statement
+            .query_map([], |row| row.get::<_, i32>(0))?
+            .collect::<duckdb::Result<Vec<_>>>()?;
+        let mut paths = Vec::with_capacity(years.len());
+        for year in years {
+            let relation = format!("read_parquet({source}) WHERE year({date_column}) = {year}");
+            let relation = format!("SELECT * FROM {relation}");
+            paths.push(self.ingest_relation(
+                &connection,
+                dataset,
+                &year.to_string(),
+                file_stem,
+                &relation,
+            )?);
+        }
+        Ok(paths)
+    }
+
+    fn ingest_relation(
+        &self,
+        connection: &Connection,
+        dataset: Dataset,
+        partition: &str,
+        file_stem: &str,
+        relation: &str,
+    ) -> Result<PathBuf> {
+        let target = self.target_path(dataset, partition, file_stem)?;
+        let query = if target.exists() {
+            merge_relation_query(dataset, &target, relation)?
+        } else if relation.trim_start().starts_with("SELECT ") {
+            relation.to_string()
+        } else {
+            format!("SELECT * FROM {relation}")
+        };
+        let temporary = temporary_path(&target);
         if let Err(error) = copy_query_to_file(&connection, &query, &temporary) {
             let _ = fs::remove_file(&temporary);
             return Err(error);
@@ -353,6 +416,34 @@ impl ParquetStore {
         Ok(connection.query_row(&sql, [], |row| row.get(0))?)
     }
 
+    /// 返回 staging 文件按数据集日期字段聚合的行数，供落库 manifest 使用。
+    pub fn staging_date_counts(
+        &self,
+        dataset: Dataset,
+        staging: &Path,
+    ) -> Result<Vec<(NaiveDate, u64)>> {
+        if !staging.is_file() {
+            return Err(StorageError::Invalid(format!(
+                "staging 文件不存在: {}",
+                staging.display()
+            )));
+        }
+        let Some(date_column) = manifest_date_column(dataset) else {
+            return Ok(Vec::new());
+        };
+        let source = sql_literal(staging);
+        let connection = Connection::open_in_memory()?;
+        validate_schema(&connection, dataset, &source)?;
+        let sql = format!(
+            "SELECT {date_column}, count(*) FROM read_parquet({source}) \
+             WHERE {date_column} IS NOT NULL GROUP BY 1 ORDER BY 1"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        Ok(statement
+            .query_map([], |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u64)))?
+            .collect::<duckdb::Result<Vec<_>>>()?)
+    }
+
     fn target_path(&self, dataset: Dataset, partition: &str, source: &str) -> Result<PathBuf> {
         let dir = self.partition_dir(dataset, partition)?;
         fs::create_dir_all(&dir)?;
@@ -402,6 +493,28 @@ fn write_group(
         return Err(error);
     }
     replace_atomically(&temporary, target)
+}
+
+fn merge_relation_query(dataset: Dataset, target: &Path, relation: &str) -> Result<String> {
+    let Some(columns) = expected_columns(dataset) else {
+        return Ok(format!("SELECT * FROM {relation}"));
+    };
+    let Some(keys) = dedup_keys(dataset) else {
+        return Ok(format!("SELECT * FROM {relation}"));
+    };
+    let columns = columns.join(", ");
+    Ok(format!(
+        "SELECT {columns} FROM (
+            SELECT {columns}, 0 AS _priority FROM read_parquet({})
+            UNION ALL
+            SELECT {columns}, 1 AS _priority FROM ({relation}) AS incoming
+        ) AS merged
+        QUALIFY row_number() OVER (
+            PARTITION BY {keys}
+            ORDER BY _priority DESC
+        ) = 1",
+        sql_literal(target)
+    ))
 }
 
 fn copy_query_to_file(connection: &Connection, query: &str, destination: &Path) -> Result<()> {
@@ -469,6 +582,34 @@ fn expected_columns(dataset: Dataset) -> Option<&'static [&'static str]> {
             "float_shares",
             "source",
         ]),
+        Dataset::Macro => None,
+    }
+}
+
+fn dedup_keys(dataset: Dataset) -> Option<&'static str> {
+    match dataset {
+        Dataset::Daily => Some("symbol, trade_date, source"),
+        Dataset::AdjFactor => Some("symbol, ex_date, source"),
+        Dataset::Financial => Some("symbol, report_period, ann_date, source"),
+        Dataset::EarningsNotice => Some("symbol, ann_date, report_period, kind, source"),
+        Dataset::PriceVal => Some("symbol, trade_date, source"),
+        Dataset::Macro => None,
+    }
+}
+
+fn partition_column(dataset: Dataset) -> Option<&'static str> {
+    match dataset {
+        Dataset::Daily | Dataset::PriceVal => Some("trade_date"),
+        Dataset::Financial | Dataset::EarningsNotice => Some("report_period"),
+        Dataset::AdjFactor | Dataset::Macro => None,
+    }
+}
+
+fn manifest_date_column(dataset: Dataset) -> Option<&'static str> {
+    match dataset {
+        Dataset::Daily | Dataset::PriceVal => Some("trade_date"),
+        Dataset::AdjFactor => Some("ex_date"),
+        Dataset::Financial | Dataset::EarningsNotice => Some("report_period"),
         Dataset::Macro => None,
     }
 }
@@ -641,6 +782,74 @@ mod tests {
             .unwrap();
         assert!(target.is_file());
         assert_eq!(store.row_count(Dataset::Daily).unwrap(), 1);
+        std::fs::remove_dir_all(layout.root).unwrap();
+    }
+
+    fn write_daily_staging(path: &std::path::Path, rows: &[(NaiveDate, f64)]) {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE rows (
+                    symbol VARCHAR, trade_date DATE, open DOUBLE, high DOUBLE,
+                    low DOUBLE, close DOUBLE, volume DOUBLE, amount DOUBLE, source VARCHAR
+                )",
+            )
+            .unwrap();
+        for (trade_date, close) in rows {
+            connection
+                .execute(
+                    "INSERT INTO rows VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    params![
+                        "600519.SH",
+                        trade_date,
+                        close - 1.0,
+                        close + 1.0,
+                        close - 2.0,
+                        close,
+                        100.0,
+                        1000.0,
+                        "test",
+                    ],
+                )
+                .unwrap();
+        }
+        let sql = format!("COPY rows TO {} (FORMAT PARQUET)", sql_literal(path));
+        connection.execute_batch(&sql).unwrap();
+    }
+
+    #[test]
+    fn partitions_and_merges_staging_by_year() {
+        let layout = temp_layout();
+        let store = ParquetStore::new(layout.clone());
+        std::fs::create_dir_all(&layout.root).unwrap();
+        let first = layout.root.join("first.parquet");
+        write_daily_staging(
+            &first,
+            &[(date("2025-12-31"), 10.0), (date("2026-01-02"), 11.0)],
+        );
+        assert_eq!(
+            store
+                .ingest_parquet_by_year(Dataset::Daily, "test", &first)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(store.row_count(Dataset::Daily).unwrap(), 2);
+
+        let second = layout.root.join("second.parquet");
+        write_daily_staging(
+            &second,
+            &[(date("2026-01-02"), 12.0), (date("2026-01-03"), 13.0)],
+        );
+        store
+            .ingest_parquet_by_year(Dataset::Daily, "test", &second)
+            .unwrap();
+        let rows = store
+            .query_daily_bars("600519.SH", Some(date("2026-01-02")), None)
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].close, 12.0);
+        assert_eq!(store.row_count(Dataset::Daily).unwrap(), 3);
         std::fs::remove_dir_all(layout.root).unwrap();
     }
 }

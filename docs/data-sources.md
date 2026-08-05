@@ -204,7 +204,7 @@
 ## 6. 故障处理
 
 - **某源失效时如何改链**：以 tushare 失效为例——
-  1. 先确认失效范围：`mfctl sources check`（M3 后可用）看探针是否通过；
+  1. 先确认失效范围：运行 `mfctl sources check` 看探针是否通过；
   2. 若为长期失效，编辑 `config/sources.toml` 将对应数据集链中该源下移或移除
      （如 `daily: [tencent, tushare]` → `[tencent]`），保留配置以利恢复后改回；
   3. 不改适配器代码的情况下优先利用优先级链自动兜底；确实需要换源补数据时再改适配器；

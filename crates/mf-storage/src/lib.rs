@@ -15,8 +15,10 @@
 
 pub mod layout;
 pub mod parquet;
+pub mod staging;
 pub mod sync;
 
 pub use layout::Layout;
 pub use parquet::{ParquetStore, StorageError};
+pub use staging::{StagingEntry, StagingManifest};
 pub use sync::{SyncEntry, SyncManifest, SyncStatus};

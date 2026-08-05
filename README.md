@@ -26,13 +26,13 @@ cargo build                                          # 构建 mfctl（需 Rust 1
 
 ## CLI 子命令
 
-状态与 crates/mfctl/src/main.rs 实际实现一致（`sync`/`screen`/`report`/`verify`/`backtest` 为占位输出）。
+状态与 crates/mfctl/src/main.rs 实际实现一致（`screen`/`report`/`verify`/`backtest` 仍为占位输出）。
 
 | 命令 | 用途 | 状态 |
 | --- | --- | --- |
 | `sources list` | 列出来源与优先级链 | 完成 |
 | `sources check` | 健康检查（基准股探针） | M3（Python 源已接入，HTTP 源待实现） |
-| `sync` | 增量同步行情/财务数据 | M3 |
+| `sync` | 增量同步单源单标的数据 | M3（Python SDK 已接入，HTTP 待实现） |
 | `screen` | 运行选股流水线 | M4 |
 | `report` | 生成 Markdown 报告 | M4/M5 |
 | `doctor` | 数据目录健康审计 | 完成 |
