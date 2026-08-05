@@ -73,7 +73,7 @@ myfin/
 ├── config/
 │   ├── sources.toml                 # 数据源注册表（版本 1）
 │   └── screen.toml                  # 选股参数（universe/低估/排除/回升）
-├── docs/                            # philosophy/strategy/architecture/data-sources/adr 四篇 + 3 ADR
+├── docs/                            # 策略、架构、数据源、审查与 ADR 文档
 ├── data/                            # 本地数据（gitignored）：market/{daily,adj_factor} financial macro sync reports context
 └── .agents/skills/data-source-maintenance/   # AI 维护数据源的 skill（SKILL.md 已就位）
 ```
@@ -82,6 +82,7 @@ myfin/
 
 - [docs/philosophy.md](docs/philosophy.md) —— 投资理念与「环境性低估 vs 资产性不良」分辨框架。
 - [docs/strategy.md](docs/strategy.md) —— 策略规格：六阶段流水线、信号优先级、退出规则、回测方法论。
+- [docs/strategy-review.md](docs/strategy-review.md) —— 量化策略审查：目标、实现偏差、风险问题与整改计划。
 - [docs/architecture.md](docs/architecture.md) —— 架构：crate 职责、数据流、IPC 边界、增量同步状态机、质量门。
 - [docs/data-sources.md](docs/data-sources.md) —— 数据源手册：统一 schema、注册表、维护流程（AI 维护数据源的核心参考）。
 - [docs/adr/](docs/adr/) —— 架构决策记录：零成本数据、不复权+复权因子、回测先行。
