@@ -802,6 +802,18 @@ fn cmd_doctor(layout: &Layout) -> Result<()> {
     println!("子目录: {} 个，文件: {} 个", dirs, files);
     println!("报告目录: {}", layout.reports_dir().display());
     println!("环境上下文: {}", layout.context_dir().display());
+    let store = ParquetStore::new(layout.clone());
+    for dataset in Dataset::ALL {
+        println!("数据集 {:<16} {} 行", dataset, store.row_count(dataset)?);
+    }
+    let (daily_rows, invalid_daily_rows) = store.daily_quality()?;
+    println!(
+        "日线质量：{} 行，OHLC/成交字段异常 {} 行",
+        daily_rows, invalid_daily_rows
+    );
+    if invalid_daily_rows > 0 {
+        anyhow::bail!("日线质量检查失败：发现 {} 行异常数据", invalid_daily_rows);
+    }
     Ok(())
 }
 

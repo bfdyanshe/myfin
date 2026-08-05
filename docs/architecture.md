@@ -203,7 +203,7 @@ flowchart LR
 | `verify` | 跨源抽查对账 | M3/M4 实现 |
 | `backtest` | 历史月度截面重建回测 | M4 实现 |
 
-尚未实现的子命令当前输出占位提示（`cmd_pending`），不影响注册表解析与目录审计。
+`screen`、`backtest` 和 `report` 已接入输入驱动流程；全市场数据编排与环境 context 仍由后续阶段补齐。
 
 ## 9. as-of 模块
 
@@ -216,14 +216,14 @@ flowchart LR
 
 ## 10. 质量门
 
-`mfctl doctor` / `verify` 覆盖三类检查（M3/M4 逐步落地）：
+`mfctl doctor` / `verify` 覆盖已实现的结构和跨源检查：
 
 1. **OHLC 一致性**：`high >= max(open, close)` 且 `low <= min(open, close)`、
    `volume >= 0`、`amount >= 0`；违例记录并标记该 `(source, date)` 为 `partial`。
 2. **跨源抽样对账**：`mfctl verify` 对同一标的同一交易日取 2 个源（如 mootdx vs 腾讯）的收盘价
    抽样比对，偏差超阈值（如 0.1%）即告警——用于抓前复权/字段错位类系统性错误。
-3. **行数骤变**：manifest 的 `rows` 与相邻日期对比，单日行数骤降（如 -50%）
-   视为漏拉或源故障，阻断该日数据进入流水线。
+3. **行数骤变**：manifest 的 `rows` 与相邻日期对比目前仍是待补质量门，
+   尚未自动阻断数据进入流水线。
 
 质量门结果进入报告的数据质量页（`mf-report` 的 `SourceHealthLine`）。
 

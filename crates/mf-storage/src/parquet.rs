@@ -518,6 +518,34 @@ impl ParquetStore {
         Ok(connection.query_row(&sql, [], |row| row.get(0))?)
     }
 
+    /// 检查日线的 OHLC 和成交字段，返回总行数与异常行数。
+    pub fn daily_quality(&self) -> Result<(u64, u64)> {
+        let files = self.parquet_files(Dataset::Daily)?;
+        if files.is_empty() {
+            return Ok((0, 0));
+        }
+        let source = parquet_list(&files);
+        let connection = Connection::open_in_memory()?;
+        let total = connection.query_row(
+            &format!("SELECT count(*) FROM read_parquet({source})"),
+            [],
+            |row| row.get(0),
+        )?;
+        let invalid = connection.query_row(
+            &format!(
+                "SELECT count(*) FROM read_parquet({source})
+                 WHERE high < open OR high < close OR low > open OR low > close
+                    OR volume < 0 OR amount < 0
+                    OR NOT isfinite(open) OR NOT isfinite(high)
+                    OR NOT isfinite(low) OR NOT isfinite(close)
+                    OR NOT isfinite(volume) OR NOT isfinite(amount)"
+            ),
+            [],
+            |row| row.get(0),
+        )?;
+        Ok((total, invalid))
+    }
+
     /// 返回 staging 文件按数据集日期字段聚合的行数，供落库 manifest 使用。
     pub fn staging_date_counts(
         &self,
@@ -966,6 +994,7 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].close, 1.7);
         assert_eq!(store.row_count(Dataset::Daily).unwrap(), 2);
+        assert_eq!(store.daily_quality().unwrap(), (2, 0));
         std::fs::remove_dir_all(layout.root).unwrap();
     }
 
