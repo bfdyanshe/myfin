@@ -11,6 +11,8 @@
 
 任务完成或阶段性修改完成后及时提交 git commit；提交按任务、功能组织，开发前合理拆分阶段。
 
+项目代码要及时格式化。
+
 ### git commit 规范
 
 - 主题行：祈使语气（imperative mood）、简短；使用 Conventional Commits 英文前缀（`feat`/`fix`/`docs`/`chore`/`refactor`/`test` 等），标签与标题之间用英文冒号+空格分隔。
