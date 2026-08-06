@@ -9,6 +9,7 @@ bs.login()/bs.logout() pair and runs serially.
 from __future__ import annotations
 
 import datetime as _dt
+import os
 import time
 from bisect import bisect_right
 from contextlib import contextmanager
@@ -73,7 +74,10 @@ def _session():
             source="baostock",
             operation="login",
         )
-    login = bs.login()
+    login = bs.login(
+        user_id=os.environ.get("BAOSTOCK_USER", "anonymous"),
+        password=os.environ.get("BAOSTOCK_PASSWORD", "123456"),
+    )
     if login.error_code != "0":
         if login.error_code == _BLACKLIST_ERROR_CODE:
             _blacklisted_until = time.monotonic() + _BLACKLIST_COOLDOWN_SECONDS

@@ -34,6 +34,7 @@
 ### 1.1 baostock —— 财务/估值主源
 
 - `kind = "python_sdk"`，包 `myfin_py.sources.baostock_source`；匿名登录，单次同步复用一个会话并显式 `bs.logout()`。
+- 如上游要求账户登录，可通过环境变量 `BAOSTOCK_USER` / `BAOSTOCK_PASSWORD` 注入凭据；未设置时仍使用匿名登录，凭据不会写入配置或日志。
 - 数据集：`daily, adj_factor, financial, earnings_notice, price_val`——**唯一**覆盖
   `adj_factor` 与 `financial` 的源，两条链都是它单源。
 - 口径要点（`notes` 字段）：
