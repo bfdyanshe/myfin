@@ -15,7 +15,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
-duckdb = { version = "1.10505.0", features = ["bundled", "parquet", "chrono"] }
+duckdb = { version = "1.10505.0", features = ["bundled", "json", "parquet", "chrono"] }
 log = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }

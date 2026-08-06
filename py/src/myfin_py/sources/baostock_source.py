@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as _dt
 import time
 from bisect import bisect_right
+from contextlib import contextmanager
 
 import pandas as pd
 
@@ -54,6 +55,7 @@ def from_bs_code(code: str) -> str:
     return f"{code6}.{prefix.upper()}"
 
 
+@contextmanager
 def _session():
     """Yield a logged-in baostock session; always logout on exit."""
     if bs is None:

@@ -132,7 +132,8 @@ impl TencentSource {
         end: NaiveDate,
     ) -> Result<Vec<DailyBar>> {
         self.limiter.wait().await;
-        let param = format!("{symbol},day,{start},{end},640,");
+        let provider_symbol = tencent_symbol(symbol)?;
+        let param = format!("{provider_symbol},day,{start},{end},640,");
         let response = self
             .client
             .get(TENCENT_KLINE_URL)
@@ -151,7 +152,7 @@ impl TencentSource {
                 format!("HTTP {}: {}", status, truncate(&body)),
             ));
         }
-        parse_tencent_daily(&body, symbol)
+        parse_tencent_daily(&body, &provider_symbol)
     }
 }
 
@@ -524,6 +525,14 @@ fn canonical_symbol(symbol: &str) -> Result<String> {
     ))
 }
 
+fn tencent_symbol(symbol: &str) -> Result<String> {
+    let canonical = canonical_symbol(symbol)?;
+    let (code, exchange) = canonical
+        .split_once('.')
+        .ok_or_else(|| Error::source_err("tencent", "无法拆分规范化股票代码"))?;
+    Ok(format!("{}{}", exchange.to_ascii_lowercase(), code))
+}
+
 fn build_client(user_agent: &str) -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
@@ -646,6 +655,12 @@ mod tests {
         assert_eq!(rows[0].symbol, "600519.SH");
         assert_eq!(rows[0].volume, 37450.0);
         assert_eq!(rows[0].amount, 0.0);
+    }
+
+    #[test]
+    fn converts_canonical_symbol_for_tencent() {
+        assert_eq!(tencent_symbol("600519.SH").unwrap(), "sh600519");
+        assert_eq!(tencent_symbol("sz000001").unwrap(), "sz000001");
     }
 
     #[test]

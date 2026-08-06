@@ -723,7 +723,28 @@ impl ParquetStore {
         let mut files = Vec::new();
         collect_parquet_files(&root, &mut files)?;
         files.sort();
-        Ok(files)
+        if !matches!(dataset, Dataset::Financial | Dataset::EarningsNotice) {
+            return Ok(files);
+        }
+
+        let expected = expected_columns(dataset).expect("financial datasets have schemas");
+        let connection = Connection::open_in_memory()?;
+        let mut matching = Vec::new();
+        for path in files {
+            let source = sql_literal(&path);
+            let sql = format!("DESCRIBE SELECT * FROM read_parquet({source})");
+            let columns = connection
+                .prepare(&sql)?
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<duckdb::Result<Vec<_>>>()?;
+            if expected
+                .iter()
+                .all(|column| columns.iter().any(|name| name == column))
+            {
+                matching.push(path);
+            }
+        }
+        Ok(matching)
     }
 }
 
