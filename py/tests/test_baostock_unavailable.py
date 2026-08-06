@@ -30,6 +30,43 @@ class BaostockUnavailableTest(unittest.TestCase):
 
         self.assertEqual(caught.exception.operation, "login")
 
+    def test_earnings_rows_use_current_baostock_field_names(self):
+        source = source_module.BaostockSource()
+        forecast = source._forecast_row(
+            {
+                "profitForcastExpPubDate": "2026-01-15",
+                "profitForcastExpStatDate": "2025-12-31",
+                "profitForcastChgPctUp": "40",
+                "profitForcastChgPctDwn": "20",
+            },
+            "600519.SH",
+        )
+        express = source._express_row(
+            {
+                "performanceExpPubDate": "2026-04-01",
+                "performanceExpStatDate": "2026-03-31",
+            },
+            "600519.SH",
+        )
+
+        self.assertEqual(forecast["ann_date"].isoformat(), "2026-01-15")
+        self.assertEqual(forecast["report_period"].isoformat(), "2025-12-31")
+        self.assertEqual(forecast["net_profit_yoy"], 30.0)
+        self.assertEqual(express["ann_date"].isoformat(), "2026-04-01")
+        self.assertEqual(express["report_period"].isoformat(), "2026-03-31")
+
+    def test_financial_values_keep_current_sdk_units(self):
+        mapped = source_module.BaostockSource()._map_profit(
+            {
+                "MBRevenue": "170611838052.02",
+                "netProfit": "89334728025.90",
+                "epsTTM": "68.64",
+            }
+        )
+
+        self.assertEqual(mapped["revenue"], 170611838052.02)
+        self.assertEqual(mapped["net_profit"], 89334728025.90)
+
 
 if __name__ == "__main__":
     unittest.main()

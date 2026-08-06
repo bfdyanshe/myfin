@@ -505,8 +505,9 @@ fn cmd_sync_single(
     let parquet_dir = staging_dir.join(dataset.as_str());
     let parquet_file = single_parquet_file(&parquet_dir)?;
     let file_stem = format!(
-        "{}-{}",
+        "{}-{}-{}",
         safe_component(&args.source),
+        dataset,
         safe_component(&args.symbol)
     );
     let store = ParquetStore::new(layout.clone());

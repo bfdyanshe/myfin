@@ -38,7 +38,6 @@ else:
 from myfin_py.sources import BaseAdapter, SourceError  # noqa: E402
 
 _BS_FIELDS = "date,open,high,low,close,volume,amount"
-_WAN = 1e4  # baostock quarterly financials report amounts in 万元 -> 元
 _BLACKLIST_COOLDOWN_SECONDS = 3600.0
 _QUERY_INTERVAL_SECONDS = 0.8
 _blacklisted_until = 0.0
@@ -340,8 +339,8 @@ class BaostockSource(BaseAdapter):
         rev = _num(rec, "MBRevenue")
         np_ = _num(rec, "profit_net", "netProfit")
         return {
-            "revenue": rev * _WAN if rev is not None else None,
-            "net_profit": np_ * _WAN if np_ is not None else None,
+            "revenue": rev,
+            "net_profit": np_,
             "eps": _num(rec, "epsTTM"),  # no plain quarterly EPS; epsTTM as approximation
             "gross_margin": _num(rec, "gpMargin"),
             "roe": _num(rec, "roeAvg"),
@@ -355,9 +354,9 @@ class BaostockSource(BaseAdapter):
         assets = _num(rec, "totalAssets", "total_assets", "totalAsset")
         liabilities = _num(rec, "totalLiability", "totalLiabilities", "total_liabilities")
         return {
-            "equity": equity * _WAN if equity is not None else None,
-            "total_assets": assets * _WAN if assets is not None else None,
-            "total_liabilities": liabilities * _WAN if liabilities is not None else None,
+            "equity": equity,
+            "total_assets": assets,
+            "total_liabilities": liabilities,
             "debt_ratio": _num(rec, "liabilityToAsset"),
         }
 
@@ -372,7 +371,7 @@ class BaostockSource(BaseAdapter):
             "netOperateCashFlow",
             "NCFO",
         )
-        return {"oper_cash_flow": value * _WAN if value is not None else None}
+        return {"oper_cash_flow": value}
 
     # ------------------------------------------------------------------
     # earnings_notice (forecast + express)
@@ -432,7 +431,7 @@ class BaostockSource(BaseAdapter):
                         total = _num(rec, "totalShare", "totalShares")
                         floating = _num(rec, "liqaShare", "floatShare", "floatShares")
                         if report_period is not None and total is not None and floating is not None:
-                            share_points.append((report_period, total * _WAN, floating * _WAN))
+                            share_points.append((report_period, total, floating))
             rs = pacer.call(
                 session.query_history_k_data_plus,
                 code,
@@ -468,11 +467,14 @@ class BaostockSource(BaseAdapter):
         return canonicalize(pd.DataFrame(rows), "price_val")
 
     def _forecast_row(self, rec, symbol):
-        yoy = _mid(_num(rec, "profitYoy"), _num(rec, "profitYoyMax"))
+        yoy = _mid(
+            _num(rec, "profitForcastChgPctUp"),
+            _num(rec, "profitForcastChgPctDwn"),
+        )
         return {
             "symbol": symbol,
-            "ann_date": to_date(rec.get("pubDate")) if rec.get("pubDate") else None,
-            "report_period": to_date(rec.get("statDate")) if rec.get("statDate") else None,
+            "ann_date": _parse_date(rec.get("profitForcastExpPubDate")),
+            "report_period": _parse_date(rec.get("profitForcastExpStatDate")),
             "kind": "forecast",
             # baostock forecast gives YoY + range only, no absolute profit.
             "net_profit": None,
@@ -481,15 +483,14 @@ class BaostockSource(BaseAdapter):
         }
 
     def _express_row(self, rec, symbol):
-        np_ = _num(rec, "netProfit")
         return {
             "symbol": symbol,
-            "ann_date": to_date(rec.get("pubDate")) if rec.get("pubDate") else None,
-            "report_period": to_date(rec.get("statDate")) if rec.get("statDate") else None,
+            "ann_date": _parse_date(rec.get("performanceExpPubDate")),
+            "report_period": _parse_date(rec.get("performanceExpStatDate")),
             "kind": "express",
-            # express amounts are 万元 in baostock; convert to 元.
-            "net_profit": np_ * _WAN if np_ else None,
-            "net_profit_yoy": _num(rec, "profitYoY", "profitYoy"),
+            # performance express does not expose absolute net profit in the current SDK schema.
+            "net_profit": None,
+            "net_profit_yoy": None,
             "source": self.name,
         }
 

@@ -40,8 +40,12 @@
 - 口径要点（`notes` 字段）：
   - 复权因子接口给出**后复权累计因子**（`adjustflag=3`），作为 `adj_factor` 唯一主源；
   - `daily` 输出不复权（`adjustflag=3`），后复权由存储层本地换算；
-  - 财务字段映射到 `FinancialField`：`revenue/net_profit/equity/total_liabilities/oper_cash_flow/
-    eps/bps/roe/gross_margin`；`net_profit` 取 `profit_net_ratio` 列；
+  - 财务字段映射以 Baostock 当前字段名为准：`MBRevenue/netProfit/epsTTM/gpMargin/roeAvg/
+    liabilityToAsset` 映射到 `FinancialField`；`netProfit`、`MBRevenue` 已是元，`totalShare`、
+    `liqaShare` 已是股数，不能再次乘 10000；
+  - 当前 `balance` / `cash_flow` 接口主要返回比率字段，`equity`、`oper_cash_flow` 等金额字段可能缺失，
+    这会触发严格选股质量门；业绩接口公告日和报告期使用 `profitForcastExpPubDate/StatDate`、
+    `performanceExpPubDate/StatDate`；
   - 单连接非线程安全：worker 内串行，查询间隔至少 800 ms，并显式 `bs.logout()`。
 - 已知限制：不含北交所；缺少 `pubDate` 的记录会标记 `ann_date_is_approx`，严格点时被阻断。
   - 连接或服务端不可用时，worker 返回对应 schema 的空结果并将任务记为 `skipped`；
