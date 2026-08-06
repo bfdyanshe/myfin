@@ -102,6 +102,7 @@ def write_parquet(df: pd.DataFrame, dataset: str, out: Path, symbol: str) -> Pat
 
 
 def append_manifest(out: Path, entry: dict) -> None:
+    out.mkdir(parents=True, exist_ok=True)
     with open(out / MANIFEST_NAME, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
 

@@ -9,6 +9,7 @@ bs.login()/bs.logout() pair and runs serially.
 from __future__ import annotations
 
 import datetime as _dt
+from functools import wraps
 import os
 import time
 from bisect import bisect_right
@@ -42,6 +43,46 @@ _BLACKLIST_COOLDOWN_SECONDS = 3600.0
 _QUERY_INTERVAL_SECONDS = 0.8
 _blacklisted_until = 0.0
 
+_UNAVAILABLE_ERROR_CODES = {
+    "BSERR_NO_LOGIN": "10001001",
+    "BSERR_LOGIN_COUNT_LIMIT": "10001005",
+    "BSERR_BLACKLIST_USER": "10001011",
+    "BSERR_SOCKET_ERR": "10002001",
+    "BSERR_CONNECT_FAIL": "10002002",
+    "BSERR_CONNECT_TIMEOUT": "10002003",
+    "BSERR_RECVCONNECTION_CLOSED": "10002004",
+    "BSERR_SENDSOCK_FAIL": "10002005",
+    "BSERR_SENDSOCK_TIMEOUT": "10002006",
+    "BSERR_RECVSOCK_FAIL": "10002007",
+    "BSERR_RECVSOCK_TIMEOUT": "10002008",
+}
+
+
+class _BaostockUnavailable(SourceError):
+    """Baostock 服务或连接暂不可用，可按空结果继续流水线。"""
+
+
+def _is_unavailable_code(error_code: str) -> bool:
+    return error_code in {
+        getattr(bs_constants, name, fallback) if bs_constants is not None else fallback
+        for name, fallback in _UNAVAILABLE_ERROR_CODES.items()
+    }
+
+
+def _empty_on_unavailable(dataset):
+    def decorate(function):
+        @wraps(function)
+        def wrapped(self, *args, **kwargs):
+            try:
+                return function(self, *args, **kwargs)
+            except _BaostockUnavailable as exc:
+                self._last_unavailable_error = str(exc)
+                return empty_frame(dataset)
+
+        return wrapped
+
+    return decorate
+
 
 def to_bs_code(symbol: str) -> str:
     """Canonical `600519.SH` -> baostock `sh.600519` (unsupported exchanges raise)."""
@@ -69,30 +110,39 @@ def _session():
         raise SourceError(IMPORT_ERROR, source="baostock")
     remaining = _blacklisted_until - time.monotonic()
     if remaining > 0:
-        raise SourceError(
+        raise _BaostockUnavailable(
             "Baostock 服务端拒绝当前访问来源（黑名单用户），"
-            f"本进程将在 {remaining:.0f} 秒内停止重试；请联系 Baostock 管理员解除限制",
+            f"本进程将在 {remaining:.0f} 秒内停止重试；本次数据按空结果处理",
             source="baostock",
             operation="login",
         )
-    login = bs.login(
-        user_id=os.environ.get("BAOSTOCK_USER", "anonymous"),
-        password=os.environ.get("BAOSTOCK_PASSWORD", "123456"),
-    )
+    try:
+        login = bs.login(
+            user_id=os.environ.get("BAOSTOCK_USER", "anonymous"),
+            password=os.environ.get("BAOSTOCK_PASSWORD", "123456"),
+        )
+    except Exception as exc:  # noqa: BLE001 - SDK turns network failures into varied exceptions
+        raise _BaostockUnavailable(
+            f"Baostock 登录连接异常：{exc}；本次数据按空结果处理",
+            source="baostock",
+            operation="login",
+        ) from exc
     if login.error_code != "0":
-        blacklist_code = getattr(bs_constants, "BSERR_BLACKLIST_USER", None)
-        if (
-            login.error_code == blacklist_code
-            or "黑名单" in (login.error_msg or "")
-        ):
-            _blacklisted_until = time.monotonic() + _BLACKLIST_COOLDOWN_SECONDS
-            raise SourceError(
-                f"Baostock 服务端拒绝当前访问来源（错误码 {login.error_code}：黑名单用户），"
-                "不再自动重试；请联系 Baostock 管理员解除限制",
+        if _is_unavailable_code(login.error_code) or "黑名单" in (login.error_msg or ""):
+            blacklist_code = getattr(bs_constants, "BSERR_BLACKLIST_USER", "10001011")
+            if login.error_code == blacklist_code or "黑名单" in (login.error_msg or ""):
+                _blacklisted_until = time.monotonic() + _BLACKLIST_COOLDOWN_SECONDS
+            raise _BaostockUnavailable(
+                f"Baostock 登录不可用（错误码 {login.error_code}：{login.error_msg}），"
+                "本次数据按空结果处理",
                 source="baostock",
                 operation="login",
             )
-        raise SourceError(f"bs.login() failed: {login.error_msg}", source="baostock")
+        raise SourceError(
+            f"bs.login() failed ({login.error_code}): {login.error_msg}",
+            source="baostock",
+            operation="login",
+        )
     try:
         yield bs
     finally:
@@ -115,6 +165,13 @@ class _QueryPacer:
 
 def _rows(rs):
     if rs.error_code != "0":
+        if _is_unavailable_code(rs.error_code):
+            raise _BaostockUnavailable(
+                f"Baostock 查询连接不可用（错误码 {rs.error_code}：{rs.error_msg}），"
+                "本次数据按空结果处理",
+                source="baostock",
+                operation="query",
+            )
         raise SourceError(f"baostock query failed: {rs.error_msg}", source="baostock")
     while rs.next():
         yield dict(zip(rs.fields, rs.get_row_data()))
@@ -139,10 +196,18 @@ class BaostockSource(BaseAdapter):
     PROBE_SYMBOL = "600519.SH"
     PROBE_LOOKBACK_DAYS = 5
 
+    def health_check(self) -> dict:
+        self._last_unavailable_error = None
+        report = super().health_check()
+        if self._last_unavailable_error:
+            report["error"] = self._last_unavailable_error
+        return report
+
     # ------------------------------------------------------------------
     # daily (unadjusted OHLCV)
     # ------------------------------------------------------------------
 
+    @_empty_on_unavailable("daily")
     def fetch_daily(self, symbol: str, start: str, end: str) -> pd.DataFrame:
         code = to_bs_code(symbol)
         with _session() as session:
@@ -170,6 +235,7 @@ class BaostockSource(BaseAdapter):
     # adj_factor (back-adjust cumulative factor)
     # ------------------------------------------------------------------
 
+    @_empty_on_unavailable("adj_factor")
     def fetch_adj_factor(self, symbol: str) -> pd.DataFrame:
         code = to_bs_code(symbol)
         with _session() as session:
@@ -192,6 +258,7 @@ class BaostockSource(BaseAdapter):
     # financial (quarterly snapshot; fields as list[(name, value)])
     # ------------------------------------------------------------------
 
+    @_empty_on_unavailable("financial")
     def fetch_financial(self, symbol: str, ann_date_approx_days: int = 60) -> pd.DataFrame:
         code = to_bs_code(symbol)
         today = _dt.date.today()
@@ -311,6 +378,7 @@ class BaostockSource(BaseAdapter):
     # earnings_notice (forecast + express)
     # ------------------------------------------------------------------
 
+    @_empty_on_unavailable("earnings_notice")
     def fetch_earnings_notice(self, symbol: str) -> pd.DataFrame:
         code = to_bs_code(symbol)
         start = "2003-01-01"
@@ -343,6 +411,7 @@ class BaostockSource(BaseAdapter):
     # price_val (historical shares aligned to unadjusted daily close)
     # ------------------------------------------------------------------
 
+    @_empty_on_unavailable("price_val")
     def fetch_price_val(self, symbol: str) -> pd.DataFrame:
         code = to_bs_code(symbol)
         today = _dt.date.today()

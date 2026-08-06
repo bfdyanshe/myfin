@@ -38,7 +38,8 @@ daily 输出不复权（adjustflag=3），由存储层本地换算后复权。
 eps/bps/roe/gross_margin → FinancialField。net_profit 取自 profit_net_ratio 列。
 单连接非线程安全：worker 内串行 + 显式 bs.logout()；查询间隔至少 800 ms。
 可通过环境变量 BAOSTOCK_USER / BAOSTOCK_PASSWORD 使用注册账户；未设置时使用匿名登录。
-登录错误码 10001011 表示服务端黑名单，适配器停止自动重试，需联系上游管理员解除限制。
+连接或服务端不可用时，worker 返回对应 schema 的空结果并将任务记为 skipped；sources check 仍报告失败。
+登录错误码 10001011 表示服务端黑名单，适配器停止自动重试，后续任务按空结果处理。
 """
 
 [sources.rate_limit]
