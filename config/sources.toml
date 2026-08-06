@@ -21,6 +21,7 @@ version = 1
 #    Python SDK。季频财务 2007+、业绩预告 2003+、快报 2006+、
 #    复权因子、日 K（1990+）。不含北交所；匿名登录，有限频。
 #    缺少 pubDate 时才按 screen.toml 的偏移推算，并标记近似公告日。
+#    若登录返回 10001011（黑名单用户），适配器停止自动重试，需联系上游解除限制。
 # ----------------------------------------------------------
 [[sources]]
 name = "baostock"
@@ -35,11 +36,12 @@ notes = """
 daily 输出不复权（adjustflag=3），由存储层本地换算后复权。
 财务字段映射: revenue/net_profit/equity/total_liabilities/oper_cash_flow/
 eps/bps/roe/gross_margin → FinancialField。net_profit 取自 profit_net_ratio 列。
-单连接非线程安全：worker 内串行 + 显式 bs.logout()。
+单连接非线程安全：worker 内串行 + 显式 bs.logout()；查询间隔至少 800 ms。
+登录错误码 10001011 表示服务端黑名单，适配器停止自动重试，需联系上游管理员解除限制。
 """
 
 [sources.rate_limit]
-min_interval_ms = 300
+min_interval_ms = 800
 backoff_ms = 30000
 
 [sources.probe]

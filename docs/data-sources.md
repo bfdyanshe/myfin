@@ -22,7 +22,7 @@
 
 | 源 | kind | lang | 鉴权 | min_interval | 上限 | backoff | 数据集 | 探针 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| baostock | python_sdk | python | 无 | 300 ms | 无 | 30 s | daily, adj_factor, financial, earnings_notice, price_val | `sh.600519` / 5 日 |
+| baostock | python_sdk | python | 无 | 800 ms | 无 | 30 s | daily, adj_factor, financial, earnings_notice, price_val | `sh.600519` / 5 日 |
 | tencent | http | rust | 无 | 500 ms | 无 | 15 s | daily | `sh600519` / 5 日 |
 | tushare | http | rust | token（`TUSHARE_TOKEN`） | 1200 ms | 50/min、8000/day | 60 s | daily | `600519.SH` / 5 日 |
 | akshare | python_sdk | python | 无 | 5000 ms | 无 | 120 s | macro, earnings_notice | 空 / 0 日 |
@@ -33,7 +33,7 @@
 
 ### 1.1 baostock —— 财务/估值主源
 
-- `kind = "python_sdk"`，包 `myfin_py.sources.baostock_source`；匿名登录，显式 `bs.logout()`。
+- `kind = "python_sdk"`，包 `myfin_py.sources.baostock_source`；匿名登录，单次同步复用一个会话并显式 `bs.logout()`。
 - 数据集：`daily, adj_factor, financial, earnings_notice, price_val`——**唯一**覆盖
   `adj_factor` 与 `financial` 的源，两条链都是它单源。
 - 口径要点（`notes` 字段）：
@@ -41,8 +41,10 @@
   - `daily` 输出不复权（`adjustflag=3`），后复权由存储层本地换算；
   - 财务字段映射到 `FinancialField`：`revenue/net_profit/equity/total_liabilities/oper_cash_flow/
     eps/bps/roe/gross_margin`；`net_profit` 取 `profit_net_ratio` 列；
-  - 单连接非线程安全：worker 内串行 + 显式 `bs.logout()`。
+  - 单连接非线程安全：worker 内串行，查询间隔至少 800 ms，并显式 `bs.logout()`。
 - 已知限制：不含北交所；缺少 `pubDate` 的记录会标记 `ann_date_is_approx`，严格点时被阻断。
+  - 登录错误码 `10001011` 表示服务端将当前访问来源列入黑名单；适配器不会循环重试，需通过
+    [Baostock 登录页](https://baostock.com/login) 联系上游管理员处理。
 
 ### 1.2 tencent —— 行情备源（HTTP 零鉴权）
 
@@ -231,6 +233,11 @@
   调用间隔 5 秒起步（注册表 `min_interval_ms = 5000`），锁定版本防接口改名。
 - **行情主源 mootdx 上游轮换**：通达信公共服务器列表需维护；
   连接失败按链 fallback 到 tencent，服务器恢复后 `sources check` 复测再回归。
+- **Baostock 返回 10001011**：这是登录已到达服务端后的访问控制拒绝，不是股票代码或本地
+  DNS/TLS 错误。先停止重复探针，保存错误码和公网出口 IP，联系上游解除限制；不要用代理轮换
+  或并发重试规避封禁。恢复后先执行一次 `mfctl sources check`，再补拉缺失数据。当前
+  `earnings_notice` 有 AkShare 兜底，但 `adj_factor`、`financial`、`price_val` 仍是 Baostock
+  单源，封禁期间质量门必须保持阻断，不能用不等价数据伪造补齐。
 
 ## 7. 已核实的数据可得性事实（写入项目决策）
 

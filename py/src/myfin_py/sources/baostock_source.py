@@ -35,6 +35,10 @@ from myfin_py.sources import BaseAdapter, SourceError  # noqa: E402
 
 _BS_FIELDS = "date,open,high,low,close,volume,amount"
 _WAN = 1e4  # baostock quarterly financials report amounts in 万元 -> 元
+_BLACKLIST_ERROR_CODE = "10001011"
+_BLACKLIST_COOLDOWN_SECONDS = 3600.0
+_QUERY_INTERVAL_SECONDS = 0.8
+_blacklisted_until = 0.0
 
 
 def to_bs_code(symbol: str) -> str:
@@ -58,15 +62,46 @@ def from_bs_code(code: str) -> str:
 @contextmanager
 def _session():
     """Yield a logged-in baostock session; always logout on exit."""
+    global _blacklisted_until
     if bs is None:
         raise SourceError(IMPORT_ERROR, source="baostock")
+    remaining = _blacklisted_until - time.monotonic()
+    if remaining > 0:
+        raise SourceError(
+            f"Baostock 服务端拒绝当前访问来源（错误码 {_BLACKLIST_ERROR_CODE}：黑名单用户），"
+            f"本进程将在 {remaining:.0f} 秒内停止重试；请联系 Baostock 管理员解除限制",
+            source="baostock",
+            operation="login",
+        )
     login = bs.login()
     if login.error_code != "0":
+        if login.error_code == _BLACKLIST_ERROR_CODE:
+            _blacklisted_until = time.monotonic() + _BLACKLIST_COOLDOWN_SECONDS
+            raise SourceError(
+                f"Baostock 服务端拒绝当前访问来源（错误码 {_BLACKLIST_ERROR_CODE}：黑名单用户），"
+                "不再自动重试；请联系 Baostock 管理员解除限制",
+                source="baostock",
+                operation="login",
+            )
         raise SourceError(f"bs.login() failed: {login.error_msg}", source="baostock")
     try:
         yield bs
     finally:
         bs.logout()
+
+
+class _QueryPacer:
+    def __init__(self, interval: float = _QUERY_INTERVAL_SECONDS):
+        self._interval = interval
+        self._last_call = 0.0
+
+    def call(self, function, *args, **kwargs):
+        delay = self._interval - (time.monotonic() - self._last_call)
+        if delay > 0:
+            time.sleep(delay)
+        result = function(*args, **kwargs)
+        self._last_call = time.monotonic()
+        return result
 
 
 def _rows(rs):
@@ -153,16 +188,17 @@ class BaostockSource(BaseAdapter):
         today = _dt.date.today()
         current_quarter = (today.month - 1) // 3 + 1
         snapshots = {}
-        for year in range(2007, today.year + 1):
-            max_quarter = current_quarter if year == today.year else 4
-            for quarter in range(1, max_quarter + 1):
-                for qf, mapper in (
-                    (self._profit_data, self._map_profit),
-                    (self._balance_data, self._map_balance),
-                    (self._cash_flow_data, self._map_cash_flow),
-                ):
-                    with _session() as session:
-                        rs = qf(session, code, year, quarter)
+        pacer = _QueryPacer()
+        with _session() as session:
+            for year in range(2007, today.year + 1):
+                max_quarter = current_quarter if year == today.year else 4
+                for quarter in range(1, max_quarter + 1):
+                    for qf, mapper in (
+                        (self._profit_data, self._map_profit),
+                        (self._balance_data, self._map_balance),
+                        (self._cash_flow_data, self._map_cash_flow),
+                    ):
+                        rs = pacer.call(qf, session, code, year, quarter)
                         for rec in _rows(rs):
                             stat = rec.get("statDate")
                             if not stat:
@@ -271,10 +307,23 @@ class BaostockSource(BaseAdapter):
         start = "2003-01-01"
         end = time.strftime("%Y-%m-%d")
         rows = []
+        pacer = _QueryPacer()
         with _session() as session:
-            for rec in _rows(session.query_forecast_report(code, start_date=start, end_date=end)):
+            forecast = pacer.call(
+                session.query_forecast_report,
+                code,
+                start_date=start,
+                end_date=end,
+            )
+            for rec in _rows(forecast):
                 rows.append(self._forecast_row(rec, symbol))
-            for rec in _rows(session.query_performance_express_report(code, start_date=start, end_date=end)):
+            express = pacer.call(
+                session.query_performance_express_report,
+                code,
+                start_date=start,
+                end_date=end,
+            )
+            for rec in _rows(express):
                 rows.append(self._express_row(rec, symbol))
         if not rows:
             return empty_frame("earnings_notice")
@@ -289,17 +338,25 @@ class BaostockSource(BaseAdapter):
         code = to_bs_code(symbol)
         today = _dt.date.today()
         share_points = []
+        pacer = _QueryPacer()
         with _session() as session:
             for year in range(2007, today.year + 1):
                 max_quarter = (today.month - 1) // 3 + 1 if year == today.year else 4
                 for quarter in range(1, max_quarter + 1):
-                    for rec in _rows(session.query_profit_data(code=code, year=year, quarter=quarter)):
+                    result = pacer.call(
+                        session.query_profit_data,
+                        code=code,
+                        year=year,
+                        quarter=quarter,
+                    )
+                    for rec in _rows(result):
                         report_period = _parse_date(rec.get("statDate"))
                         total = _num(rec, "totalShare", "totalShares")
                         floating = _num(rec, "liqaShare", "floatShare", "floatShares")
                         if report_period is not None and total is not None and floating is not None:
                             share_points.append((report_period, total * _WAN, floating * _WAN))
-            rs = session.query_history_k_data_plus(
+            rs = pacer.call(
+                session.query_history_k_data_plus,
                 code,
                 "date,close",
                 start_date="2007-01-01",
