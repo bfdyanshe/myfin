@@ -36,7 +36,7 @@ from myfin_py.sources import (
 )
 
 MANIFEST_NAME = "manifest.jsonl"
-DATASETS = ("daily", "adj_factor", "financial", "earnings_notice")
+DATASETS = ("daily", "adj_factor", "financial", "earnings_notice", "price_val")
 
 # per-source minimum call interval in seconds (from config/sources.toml)
 _last_call: dict[str, float] = {}
@@ -114,6 +114,7 @@ def fetch_and_store(
     limits: dict[str, float],
     start: Optional[str] = None,
     end: Optional[str] = None,
+    ann_date_approx_days: int = 60,
 ) -> int:
     adapter: BaseAdapter = get_source(source)
     throttle(source, limits)
@@ -124,9 +125,13 @@ def fetch_and_store(
         elif dataset == "adj_factor":
             df = adapter.fetch_adj_factor(symbol)
         elif dataset == "financial":
-            df = adapter.fetch_financial(symbol)
+            df = adapter.fetch_financial(
+                symbol, ann_date_approx_days=ann_date_approx_days
+            )
         elif dataset == "earnings_notice":
             df = adapter.fetch_earnings_notice(symbol)
+        elif dataset == "price_val":
+            df = adapter.fetch_price_val(symbol)
         else:
             raise SourceError(f"worker does not handle dataset {dataset!r}", source=source)
     except NotImplementedError as exc:
@@ -205,6 +210,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         if dataset == "daily":
             p.add_argument("--start", default=None, help="YYYY-MM-DD (default: end - 5 years)")
             p.add_argument("--end", default=None, help="YYYY-MM-DD (default: today)")
+        if dataset == "financial":
+            p.add_argument(
+                "--ann-date-approx-days",
+                type=int,
+                default=60,
+                help="缺少真实 pubDate 时使用的保守公告日偏移（默认 60）",
+            )
 
     health = sub.add_parser("health-check", help="probe Python data sources")
     health.add_argument("--source", default=None, help="only probe one adapter")
@@ -221,13 +233,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.cmd == "health-check":
         return health_check(args.source, args.registry)
 
+    ann_date_approx_days = getattr(args, "ann_date_approx_days", 60)
+    if ann_date_approx_days < 0:
+        raise SystemExit("--ann-date-approx-days 不能为负数")
+
     end = _dt.date.today().isoformat()
     start = ( _dt.date.today() - _dt.timedelta(days=5 * 365)).isoformat()
     if args.cmd == "fetch-daily":
         start = args.start or start
         end = args.end or end
     return fetch_and_store(args.source, args.symbol, args.cmd.removeprefix("fetch-"),
-                           Path(args.out), limits, start=start, end=end)
+                           Path(args.out), limits, start=start, end=end,
+                           ann_date_approx_days=ann_date_approx_days)
 
 
 if __name__ == "__main__":

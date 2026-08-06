@@ -205,6 +205,10 @@ mod tests {
             symbol: symbol.to_string(),
             report_period: NaiveDate::from_ymd_opt(year, month, 1).unwrap(),
             ann_date: NaiveDate::from_ymd_opt(year, month, 15).unwrap(),
+            ann_date_is_approx: false,
+            report_version: None,
+            period_kind: mf_core::FinancialPeriodKind::SingleQuarter,
+            raw_fields: vec![(FinancialField::NetProfit, profit)],
             fields: vec![(FinancialField::NetProfit, profit)],
             source: "test".to_string(),
         }

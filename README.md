@@ -66,8 +66,8 @@ uv run --project py python -c "import pandas; print(pandas.__version__)"
 
 | 源 | 角色 | 鉴权 | 数据集 | 优先级链 |
 | --- | --- | --- | --- | --- |
-| mootdx | 行情主源（通达信 TCP） | 无 | daily, price_val | daily: mootdx → tencent → tushare |
-| tencent | 行情备源（HTTP） | 无 | daily, price_val | price_val: mootdx → tencent |
+| mootdx | 行情主源（通达信 TCP） | 无 | daily | daily: mootdx → tencent → tushare |
+| tencent | 行情备源（HTTP） | 无 | daily | — |
 | baostock | 财务/复权因子/业绩预告主源 | 无 | daily, adj_factor, financial, earnings_notice, price_val | financial / adj_factor: baostock |
 | tushare | 行情校准/兜底（免费档） | `TUSHARE_TOKEN` | daily | earnings_notice: baostock → akshare |
 | akshare | 宏观/新闻辅助 | 无 | macro, earnings_notice | macro: akshare |
@@ -108,21 +108,32 @@ myfin/
 - [config/screen.toml](config/screen.toml) —— 选股流水线可调参数。
 - [.agents/skills/data-source-maintenance/SKILL.md](.agents/skills/data-source-maintenance/SKILL.md) —— AI 维护数据源的工作流（新增/停用/修复数据源、调整优先级链、故障切换）。
 
+## 运行入口
+
+全市场筛选需要点时股票池快照（`InstrumentSnapshot[]`）和已同步的全量 Parquet：
+
+```bash
+mfctl --data-dir data screen --all --as-of 2026-08-05 --universe data/universe/snapshots.json
+```
+
+历史回测输入必须为 `HistoricalCandidate[]`，每个输入同时提供 `trading_status`；缺少历史停牌/涨跌停
+状态、真实公告日或同步质量通过标记时，`mfctl backtest` 会拒绝运行。
+
 ## 路线图
 
 - **M1 脚手架（完成）**：workspace、领域模型、注册表解析、数据目录、CLI 骨架、sources list/doctor、Python worker 与 3 个 SDK 适配器骨架、数据源维护 skill、全套文档。
 - **M2 存储层（完成）**：Parquet 数据层 + DuckDB 查询（SQLite 可选）、增量同步状态机。
 - **M3 数据源适配器**：Rust HTTP 日线适配器、sources check、sync 故障切换与 verify 已完成。
-- **M4 指标 + 筛选 + 回测**：指标、筛选引擎与 JSON 输入回测已接入；全市场数据编排待补。
-- **M5 报告**：候选清单、数据质量 Markdown 报告与输入驱动的行业环境归因已接入；全市场数据编排待补。
-- **M6 打磨**：性能、稳定性、文档完善。
+- **M4 指标 + 筛选 + 回测（完成）**：筛选引擎支持全市场输入编排，估值使用不复权价格与点时股本，回测固定月末信号、下一交易日成交、等权/行业上限、成本后收益、样本外与消融。
+- **M5 报告（完成）**：候选清单、风险旗标、行业环境归因、组合风险指标、样本外与消融结果、同步质量门均进入报告/CLI。
+- **M6 打磨（完成）**：点时字段契约、财务累计值转换、真实公告日门禁、能力注册校验、manifest 严格解析、行数骤变检查、Rust/Python 格式与文档已收口。
 
 ## 已知限制
 
 - Tushare 免费档无估值/财务数据（仅不复权日线），估值分位完全依赖本地自算。
 - 北向资金自 2024 年起停止披露持股数据，相关因子不可用。
 - 前复权统一由本地复权因子换算（baostock 为主源），不信任第三方前复权数据。
-- 免费数据源无公告日期：财务披露时点按「报告期末 + 约 60 天」近似（config/screen.toml）。
+- 免费数据源缺少公告日期时严格流程会阻断；调试模式才允许带 `ann_date_is_approx` 的保守近似值。
 - MVP 排除北交所（上游数据源对 BJ 支持不稳定）。
 
 ## 免责声明

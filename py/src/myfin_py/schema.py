@@ -15,7 +15,17 @@ import pyarrow as pa
 
 DAILY_COLUMNS = ["symbol", "trade_date", "open", "high", "low", "close", "volume", "amount", "source"]
 ADJ_FACTOR_COLUMNS = ["symbol", "ex_date", "cum_factor", "source"]
-FINANCIAL_COLUMNS = ["symbol", "report_period", "ann_date", "fields", "source"]
+FINANCIAL_COLUMNS = [
+    "symbol",
+    "report_period",
+    "ann_date",
+    "ann_date_is_approx",
+    "report_version",
+    "period_kind",
+    "raw_fields",
+    "fields",
+    "source",
+]
 EARNINGS_COLUMNS = ["symbol", "ann_date", "report_period", "kind", "net_profit", "net_profit_yoy", "source"]
 PRICE_VAL_COLUMNS = ["symbol", "trade_date", "close", "total_shares", "float_shares", "source"]
 
@@ -78,6 +88,10 @@ ARROW_SCHEMAS = {
             pa.field("symbol", _STRING),
             pa.field("report_period", _DATE),
             pa.field("ann_date", _DATE),
+            pa.field("ann_date_is_approx", pa.bool_()),
+            pa.field("report_version", _STRING),
+            pa.field("period_kind", _STRING),
+            pa.field("raw_fields", pa.list_(pa.field("item", _FIELD_STRUCT))),
             pa.field("fields", pa.list_(pa.field("item", _FIELD_STRUCT))),
             pa.field("source", _STRING),
         ]

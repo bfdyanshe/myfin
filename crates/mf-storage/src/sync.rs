@@ -71,28 +71,32 @@ impl SyncManifest {
             return Ok(m);
         }
         let file = File::open(path)?;
-        for line in BufReader::new(file).lines() {
+        for (line_number, line) in BufReader::new(file).lines().enumerate() {
             let line = line?;
             if line.trim().is_empty() {
                 continue;
             }
-            if let Ok(entry) = serde_json::from_str::<SyncEntry>(&line) {
-                m.index
-                    .entry(entry.dataset)
-                    .or_default()
-                    .entry(entry.source.clone())
-                    .or_default()
-                    .insert(entry.trade_date, entry);
-            }
+            let entry = serde_json::from_str::<SyncEntry>(&line).map_err(|error| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("manifest 第 {} 行无效: {error}", line_number + 1),
+                )
+            })?;
+            m.index
+                .entry(entry.dataset)
+                .or_default()
+                .entry(entry.source.clone())
+                .or_default()
+                .insert(entry.trade_date, entry);
         }
         Ok(m)
     }
 
-    /// 追加一条状态并写盘（原子追加：写临时文件后 rename，避免截断损坏）。
+    /// 追加一条状态并同步到磁盘。
     pub fn record(&mut self, path: &Path, entry: SyncEntry) -> std::io::Result<()> {
         let mut file = OpenOptions::new().create(true).append(true).open(path)?;
         writeln!(file, "{}", serde_json::to_string(&entry).unwrap())?;
-        file.flush()?;
+        file.sync_all()?;
         self.index
             .entry(entry.dataset)
             .or_default()
@@ -117,17 +121,16 @@ impl SyncManifest {
         };
         expected
             .iter()
-            .filter(|d| !by_date.contains_key(d))
+            .filter(|d| {
+                !by_date
+                    .get(d)
+                    .is_some_and(|entry| entry.status == SyncStatus::Done)
+            })
             .copied()
             .collect()
     }
 
-    pub fn status(
-        &self,
-        dataset: Dataset,
-        source: &str,
-        date: NaiveDate,
-    ) -> Option<&SyncEntry> {
+    pub fn status(&self, dataset: Dataset, source: &str, date: NaiveDate) -> Option<&SyncEntry> {
         self.index.get(&dataset)?.get(source)?.get(&date)
     }
 
@@ -136,8 +139,42 @@ impl SyncManifest {
             .values()
             .flat_map(|by_source| by_source.values())
             .flat_map(|by_date| by_date.values())
-            .filter(|e| e.status == SyncStatus::Failed)
+            .filter(|e| matches!(e.status, SyncStatus::Failed | SyncStatus::Partial))
             .collect()
+    }
+
+    pub fn blocking_entries(&self) -> Vec<&SyncEntry> {
+        self.failed_entries()
+    }
+
+    /// 检测同一源连续记录中的极端行数变化，避免半截返回被当成完整数据。
+    pub fn row_count_anomalies(&self, ratio: f64) -> Vec<&SyncEntry> {
+        let mut anomalies = Vec::new();
+        for by_source in self.index.values() {
+            for by_date in by_source.values() {
+                let mut counts = by_date
+                    .values()
+                    .filter_map(|entry| {
+                        (entry.status == SyncStatus::Done && entry.rows > 0).then_some(entry.rows)
+                    })
+                    .collect::<Vec<_>>();
+                if counts.len() < 5 {
+                    continue;
+                }
+                counts.sort_unstable();
+                let median = counts[counts.len() / 2] as f64;
+                for entry in by_date.values() {
+                    let value = entry.rows as f64;
+                    if entry.status == SyncStatus::Done
+                        && value > 0.0
+                        && (value > median * ratio || value * ratio < median)
+                    {
+                        anomalies.push(entry);
+                    }
+                }
+            }
+        }
+        anomalies
     }
 }
 
@@ -153,7 +190,8 @@ mod tests {
         let mut m = SyncManifest::load(&path).unwrap();
         let d1 = NaiveDate::from_ymd_opt(2026, 8, 3).unwrap();
         let d2 = NaiveDate::from_ymd_opt(2026, 8, 4).unwrap();
-        m.record(&path, SyncEntry::done(Dataset::Daily, "baostock", d1, 5400)).unwrap();
+        m.record(&path, SyncEntry::done(Dataset::Daily, "baostock", d1, 5400))
+            .unwrap();
         let expected = vec![d1, d2];
         let missing = m.missing_dates(Dataset::Daily, "baostock", &expected);
         assert_eq!(missing, vec![d2]);
@@ -161,5 +199,15 @@ mod tests {
         let reloaded = SyncManifest::load(&path).unwrap();
         assert!(reloaded.status(Dataset::Daily, "baostock", d1).is_some());
         std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn rejects_invalid_manifest_lines() {
+        let tmp = std::env::temp_dir().join(format!("mf-sync-invalid-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("daily.jsonl");
+        std::fs::write(&path, "{\"dataset\":\"daily\"\n").unwrap();
+        assert!(SyncManifest::load(&path).is_err());
+        std::fs::remove_dir_all(tmp).unwrap();
     }
 }

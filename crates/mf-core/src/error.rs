@@ -27,6 +27,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
     pub fn source_err(source: impl Into<String>, detail: impl Into<String>) -> Self {
-        Error::Source { source_name: source.into(), detail: detail.into() }
+        Error::Source {
+            source_name: source.into(),
+            detail: detail.into(),
+        }
     }
 }

@@ -54,7 +54,10 @@ pub struct MarkdownReport {
 
 impl MarkdownReport {
     pub fn new(title: impl Into<String>) -> Self {
-        Self { title: title.into(), sections: Vec::new() }
+        Self {
+            title: title.into(),
+            sections: Vec::new(),
+        }
     }
 
     pub fn add_heading(&mut self, text: &str, level: u8) {
@@ -71,7 +74,11 @@ impl MarkdownReport {
     pub fn add_table(&mut self, header: &[&str], rows: &[Vec<String>]) {
         let mut s = String::new();
         let _ = write!(s, "| {} |\n", header.join(" | "));
-        let _ = write!(s, "|{}|\n", header.iter().map(|_| "---").collect::<Vec<_>>().join("|"));
+        let _ = write!(
+            s,
+            "|{}|\n",
+            header.iter().map(|_| "---").collect::<Vec<_>>().join("|")
+        );
         for row in rows {
             let _ = write!(s, "| {} |\n", row.join(" | "));
         }
@@ -111,11 +118,20 @@ pub fn candidate_table(candidates: &[Candidate]) -> Vec<Vec<String>> {
                 c.symbol.clone(),
                 c.name.clone(),
                 c.industry.clone().unwrap_or_default(),
-                c.pe_percentile.map(|v| format!("{:.1}%", v * 100.0)).unwrap_or_default(),
-                c.pb_percentile.map(|v| format!("{:.1}%", v * 100.0)).unwrap_or_default(),
-                c.earnings_turnaround_yoy.map(|v| format!("{:.1}%", v)).unwrap_or_default(),
-                c.momentum_3m_pct.map(|v| format!("{:.1}%", v)).unwrap_or_default(),
+                c.pe_percentile
+                    .map(|v| format!("{:.1}%", v * 100.0))
+                    .unwrap_or_default(),
+                c.pb_percentile
+                    .map(|v| format!("{:.1}%", v * 100.0))
+                    .unwrap_or_default(),
+                c.earnings_turnaround_yoy
+                    .map(|v| format!("{:.1}%", v))
+                    .unwrap_or_default(),
+                c.momentum_3m_pct
+                    .map(|v| format!("{:.1}%", v))
+                    .unwrap_or_default(),
                 env_tags.join("; "),
+                c.risk_flags.join("; "),
                 c.rationale.clone(),
             ]
         })
@@ -136,6 +152,7 @@ pub fn candidate_markdown(input: &ReportInput) -> String {
             "业绩拐点",
             "3 个月动量",
             "环境标签",
+            "风险旗标",
             "入选理由",
         ],
         &candidate_table(&input.candidates),
@@ -215,7 +232,14 @@ pub fn backtest_markdown(report: &BacktestReport) -> String {
         })
         .collect::<Vec<_>>();
     markdown.add_table(
-        &["年份", "入选次数", "完成数", "平均收益", "中位数收益", "胜率"],
+        &[
+            "年份",
+            "入选次数",
+            "完成数",
+            "平均收益",
+            "中位数收益",
+            "胜率",
+        ],
         &yearly,
     );
     markdown.add_heading("敏感性网格", 2);
@@ -247,6 +271,89 @@ pub fn backtest_markdown(report: &BacktestReport) -> String {
             "胜率",
         ],
         &sensitivity,
+    );
+    markdown.add_heading("组合与样本外结果", 2);
+    let portfolio = &report.portfolio;
+    markdown.add_table(
+        &["指标", "结果"],
+        &[
+            vec![
+                "组合月均收益（成本后）".to_string(),
+                format_stats(portfolio.mean_monthly_return_pct),
+            ],
+            vec![
+                "最大回撤".to_string(),
+                format_stats(portfolio.max_drawdown_pct),
+            ],
+            vec![
+                "年化波动率".to_string(),
+                format_stats(portfolio.annualized_volatility_pct),
+            ],
+            vec![
+                "累计换手".to_string(),
+                format!("{:.1}%", portfolio.turnover_pct),
+            ],
+            vec![
+                "平均持仓数".to_string(),
+                format!("{:.1}", portfolio.average_holdings),
+            ],
+            vec![
+                "平均现金比例".to_string(),
+                format!("{:.1}%", portfolio.average_cash_pct),
+            ],
+        ],
+    );
+    let exposures = portfolio
+        .industry_exposure_pct
+        .iter()
+        .map(|(industry, weight)| format!("{industry}: {weight:.1}%"))
+        .collect::<Vec<_>>();
+    if !exposures.is_empty() {
+        markdown.add_text(&format!("平均行业暴露：{}。", exposures.join("；")));
+    }
+    markdown.add_heading("价格/估值信号相关性", 3);
+    let correlations = report
+        .factor_correlations
+        .iter()
+        .map(|item| {
+            vec![
+                item.left.clone(),
+                item.right.clone(),
+                item.pearson
+                    .map(|value| format!("{value:.3}"))
+                    .unwrap_or_else(|| "—".to_string()),
+            ]
+        })
+        .collect::<Vec<_>>();
+    markdown.add_table(&["因子 A", "因子 B", "Pearson 相关"], &correlations);
+    if let Some(oos) = &report.out_of_sample {
+        markdown.add_text(&format!(
+            "样本外交易收益：样本数 {}，平均 {}，中位数 {}，胜率 {}。",
+            oos.count,
+            format_stats(oos.mean_pct),
+            format_stats(oos.median_pct),
+            format_rate(oos.win_rate)
+        ));
+    } else {
+        markdown.add_text("样本外结果不可用：历史截面少于 4 个月或没有完成交易。");
+    }
+    markdown.add_heading("关键假设消融", 3);
+    let ablations = report
+        .ablations
+        .iter()
+        .map(|item| {
+            vec![
+                item.name.clone(),
+                item.selected.to_string(),
+                item.completed.count.to_string(),
+                format_stats(item.completed.mean_pct),
+                format_stats(item.portfolio.max_drawdown_pct),
+            ]
+        })
+        .collect::<Vec<_>>();
+    markdown.add_table(
+        &["变体", "入选", "完成", "平均收益", "最大回撤"],
+        &ablations,
     );
     markdown.add_heading("数据质量说明", 2);
     markdown.add_text(

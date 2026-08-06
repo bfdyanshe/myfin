@@ -4,11 +4,11 @@ version = "0.1.0"
 description = "Python data-source adapters for the myfin quant platform (Baostock / AKShare / mootdx)"
 requires-python = ">=3.12"
 dependencies = [
-    "pandas",
-    "pyarrow",
-    "baostock",
-    "akshare",
-    "mootdx",
+    "pandas==3.0.5",
+    "pyarrow==25.0.0",
+    "baostock==0.9.3",
+    "akshare==1.18.81",
+    "mootdx==0.11.7",
 ]
 
 [build-system]

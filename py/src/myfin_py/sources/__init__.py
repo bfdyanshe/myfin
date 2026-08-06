@@ -65,7 +65,7 @@ class BaseAdapter:
     def fetch_adj_factor(self, symbol: str):
         raise NotImplementedError(f"{self.name}: adj_factor not implemented")
 
-    def fetch_financial(self, symbol: str):
+    def fetch_financial(self, symbol: str, ann_date_approx_days: int = 60):
         raise NotImplementedError(f"{self.name}: financial not implemented")
 
     def fetch_earnings_notice(self, symbol: str):

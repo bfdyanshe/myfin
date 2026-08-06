@@ -5,11 +5,14 @@
 # ============================================================
 
 [as_of]
-# 免费数据源无公告日期：财务披露时点按「报告期末 + 近似天数」处理
+# 财务优先使用真实 pubDate；缺失时按近似天数推算并由严格门禁阻断
 # Q1 4-30 / H1 8-31 / Q3 10-31 / 年报 4-30 → 取 ~60 天
 ann_date_approx_days = 60
+# 严格点时流程拒绝只有推算公告日的财务记录；研究调试可显式改为 false。
+require_real_ann_date = true
 
 [universe]
+require_point_in_time = true
 # 免费数据源不支持北交所（mootdx/baostock/腾讯公网均缺 BJ 数据）
 exclude_bse = true
 exclude_st = true
@@ -44,10 +47,18 @@ use_industry_percentile = true
 max_consecutive_loss_quarters = 2
 # 经营现金流为负的最大季数
 max_neg_cashflow_quarters = 3
+# 核心质量规则缺少经营现金流时拒绝进入筛选，而不是把缺失当作无风险。
+require_oper_cash_flow = true
 # 资产负债率上限
 max_debt_ratio = 0.70
 # 净资产 < 0 直接出池（资不抵债）
 exclude_negative_equity = true
+# 行业化硬排除阈值；未列行业使用上面的通用阈值。
+[exclusion.industry_debt_ratio]
+"银行" = 0.95
+"房地产" = 0.85
+"建筑装饰" = 0.85
+"公用事业" = 0.85
 
 [recovery]
 # 主信号：业绩预告/快报净利同比由负转正（免费可得，披露远早于财报）
@@ -60,3 +71,19 @@ momentum_days = 63
 ma_days = 120
 # 量能回升：近 20 日均成交额 / 前 60 日均成交额 >= 1.2
 volume_ratio_min = 1.2
+# 业绩主信号之外至少满足两个价格/分位/量能辅信号。
+min_secondary_signals = 2
+
+[portfolio]
+# 固定月末信号，下一交易日成交；不调整市场总仓位，仅允许无候选时持有现金。
+signal_at_month_end = true
+execution_lag_trading_days = 1
+max_positions = 20
+max_industry_weight = 0.25
+transaction_cost_bps = 5.0
+slippage_bps = 5.0
+min_entry_amount = 0.0
+allow_cash = true
+# v1 回测固定持有期；逻辑破坏退出留给单独的持仓监控流程。
+exit_on_signal_loss = false
+require_trade_status = true

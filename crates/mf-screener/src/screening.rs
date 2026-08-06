@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use chrono::{Duration, NaiveDate};
 use mf_core::{
     AdjFactor, DailyBar, EarningsNotice, EnvironmentSummary, FinancialData, FinancialField,
-    PriceVal,
+    PriceVal, TradingStatus,
 };
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +21,27 @@ pub struct ScreenInput {
     pub name: Option<String>,
     pub industry: Option<String>,
     pub is_st: bool,
+    /// 输入是否来自带生效区间的历史股票池快照。
+    #[serde(default)]
+    pub point_in_time_complete: bool,
+    /// 上市日，用于 as-of 股票池重建。
+    #[serde(default)]
+    pub listed_date: Option<NaiveDate>,
+    /// 退市日（退市后不再进入股票池）。
+    #[serde(default)]
+    pub delisted_date: Option<NaiveDate>,
+    /// as-of 日是否停牌。
+    #[serde(default)]
+    pub is_suspended: bool,
+    /// 当日涨停价；用于回测成交阻断。
+    #[serde(default)]
+    pub price_limit_up: Option<f64>,
+    /// 当日跌停价；用于回测成交阻断。
+    #[serde(default)]
+    pub price_limit_down: Option<f64>,
+    /// 历史停牌/涨跌停状态；回测严格使用对应交易日的记录。
+    #[serde(default)]
+    pub trading_status: Vec<TradingStatus>,
     pub as_of: NaiveDate,
     pub bars: Vec<DailyBar>,
     pub price_vals: Vec<PriceVal>,
@@ -62,6 +83,7 @@ pub struct ScreenResult {
     pub reason: Option<String>,
     pub metrics: ScreenMetrics,
     pub environment: Option<EnvironmentSummary>,
+    pub risk_flags: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +102,55 @@ pub fn screen(input: &ScreenInput, config: &ScreenerConfig) -> ScreenResult {
     result
 }
 
+/// 对同一 as-of 截面的全市场输入运行筛选。
+///
+/// 函数先从每个标的自身历史数据构造当日 PE/PB，再统一生成全市场和行业样本，
+/// 最后调用单标的筛选器。这样调用方无需手工拼接分位样本，也不会把未来截面混入当前截面。
+pub fn screen_universe(inputs: &[ScreenInput], config: &ScreenerConfig) -> Vec<ScreenResult> {
+    let mut market_pe_samples = Vec::new();
+    let mut market_pb_samples = Vec::new();
+    let mut industry_samples = BTreeMap::<String, (Vec<f64>, Vec<f64>)>::new();
+    for input in inputs {
+        let current = valuation_samples(input)
+            .into_iter()
+            .rev()
+            .find(|sample| sample.date <= input.as_of);
+        if let Some(sample) = &current {
+            if let Some(value) = sample.pe_ttm {
+                market_pe_samples.push(value);
+            }
+            if let Some(value) = sample.pb {
+                market_pb_samples.push(value);
+            }
+            if let Some(industry) = input.industry.as_deref().filter(|value| !value.is_empty()) {
+                let entry = industry_samples.entry(industry.to_string()).or_default();
+                if let Some(value) = sample.pe_ttm {
+                    entry.0.push(value);
+                }
+                if let Some(value) = sample.pb {
+                    entry.1.push(value);
+                }
+            }
+        }
+    }
+
+    inputs
+        .iter()
+        .map(|input| {
+            let mut input = input.clone();
+            input.market_pe_samples = market_pe_samples.clone();
+            input.market_pb_samples = market_pb_samples.clone();
+            if let Some(industry) = input.industry.as_deref() {
+                if let Some((pe, pb)) = industry_samples.get(industry) {
+                    input.industry_pe_samples = pe.clone();
+                    input.industry_pb_samples = pb.clone();
+                }
+            }
+            screen(&input, config)
+        })
+        .collect()
+}
+
 fn screen_inner(input: &ScreenInput, config: &ScreenerConfig) -> ScreenResult {
     let empty_metrics = ScreenMetrics {
         market_cap: None,
@@ -96,15 +167,48 @@ fn screen_inner(input: &ScreenInput, config: &ScreenerConfig) -> ScreenResult {
         volume_ratio: None,
         secondary_signal_count: 0,
     };
-    let mut bars = input
+    let mut bars_by_date = BTreeMap::<NaiveDate, &DailyBar>::new();
+    for bar in input
         .bars
         .iter()
         .filter(|bar| bar.symbol == input.symbol && bar.trade_date <= input.as_of)
-        .collect::<Vec<_>>();
-    bars.sort_by_key(|bar| bar.trade_date);
+    {
+        bars_by_date
+            .entry(bar.trade_date)
+            .and_modify(|current| {
+                if source_priority(&bar.source) < source_priority(&current.source) {
+                    *current = bar;
+                }
+            })
+            .or_insert(bar);
+    }
+    let bars = bars_by_date.into_values().collect::<Vec<_>>();
     let Some(latest_bar) = bars.last().copied() else {
         return rejected("universe", "缺少 as-of 日线数据", empty_metrics);
     };
+    if config.universe.require_point_in_time && !input.point_in_time_complete {
+        return rejected(
+            "universe",
+            "缺少点时股票池快照，不能用于全市场或历史筛选",
+            empty_metrics,
+        );
+    }
+    if input
+        .listed_date
+        .is_some_and(|listed_date| listed_date > input.as_of)
+        || input
+            .delisted_date
+            .is_some_and(|delisted_date| delisted_date <= input.as_of)
+    {
+        return rejected("universe", "标的未上市或已在 as-of 日前退市", empty_metrics);
+    }
+    if input.is_suspended {
+        return rejected(
+            "universe",
+            "as-of 日停牌，不能作为新买入标的",
+            empty_metrics,
+        );
+    }
     if config.universe.exclude_bse && input.symbol.ends_with(".BJ") {
         return rejected("universe", "北交所标的被配置为排除", empty_metrics);
     }
@@ -295,6 +399,27 @@ fn screen_inner(input: &ScreenInput, config: &ScreenerConfig) -> ScreenResult {
             ),
         );
     };
+    if config.as_of.require_real_ann_date && periods.iter().any(|record| record.ann_date_is_approx)
+    {
+        return rejected(
+            "exclude_bad",
+            "可见财务快照缺少真实公告日，严格点时流程已阻断",
+            metrics(
+                market_cap,
+                avg_amount,
+                current,
+                pe_percentile,
+                pb_percentile,
+                pe_industry_percentile,
+                pb_industry_percentile,
+                None,
+                &bars,
+                input,
+                0,
+                config,
+            ),
+        );
+    }
     let loss_streak = consecutive_negative(&periods, FinancialField::NetProfit);
     if loss_streak > config.exclusion.max_consecutive_loss_quarters {
         return rejected(
@@ -326,6 +451,32 @@ fn screen_inner(input: &ScreenInput, config: &ScreenerConfig) -> ScreenResult {
                 .is_some_and(|v| v < 0.0)
         })
         .count() as u32;
+    if config.exclusion.require_oper_cash_flow
+        && periods
+            .iter()
+            .rev()
+            .take(4)
+            .any(|record| record.get(FinancialField::OperCashFlow).is_none())
+    {
+        return rejected(
+            "exclude_bad",
+            "最近 4 个报告期经营现金流字段不完整，质量门阻断",
+            metrics(
+                market_cap,
+                avg_amount,
+                current,
+                pe_percentile,
+                pb_percentile,
+                pe_industry_percentile,
+                pb_industry_percentile,
+                None,
+                &bars,
+                input,
+                0,
+                config,
+            ),
+        );
+    }
     if negative_cashflow > config.exclusion.max_neg_cashflow_quarters {
         return rejected(
             "exclude_bad",
@@ -367,13 +518,19 @@ fn screen_inner(input: &ScreenInput, config: &ScreenerConfig) -> ScreenResult {
             ),
         );
     }
+    let debt_limit = input
+        .industry
+        .as_deref()
+        .and_then(|industry| config.exclusion.industry_debt_ratio.get(industry))
+        .copied()
+        .unwrap_or(config.exclusion.max_debt_ratio);
     if latest_financial
         .get(FinancialField::DebtRatio)
-        .is_some_and(|value| value > config.exclusion.max_debt_ratio)
+        .is_some_and(|value| value > debt_limit)
     {
         return rejected(
             "exclude_bad",
-            "资产负债率超过阈值",
+            &format!("资产负债率超过行业阈值 {:.1}%", debt_limit * 100.0),
             metrics(
                 market_cap,
                 avg_amount,
@@ -452,6 +609,16 @@ fn screen_inner(input: &ScreenInput, config: &ScreenerConfig) -> ScreenResult {
             result_metrics,
         );
     }
+    if result_metrics.secondary_signal_count < config.recovery.min_secondary_signals {
+        return rejected(
+            "recovery",
+            &format!(
+                "辅信号仅 {} 个，低于要求的 {} 个",
+                result_metrics.secondary_signal_count, config.recovery.min_secondary_signals
+            ),
+            result_metrics,
+        );
+    }
     ScreenResult {
         symbol: input.symbol.clone(),
         as_of: input.as_of,
@@ -460,6 +627,7 @@ fn screen_inner(input: &ScreenInput, config: &ScreenerConfig) -> ScreenResult {
         reason: None,
         metrics: result_metrics,
         environment: None,
+        risk_flags: risk_flags(market_cap, latest_financial, latest_bar.close),
     }
 }
 
@@ -509,7 +677,28 @@ fn rejected(stage: &str, reason: &str, metrics: ScreenMetrics) -> ScreenResult {
         reason: Some(reason.to_string()),
         metrics,
         environment: None,
+        risk_flags: Vec::new(),
     }
+}
+
+fn risk_flags(market_cap: f64, financial: &FinancialData, close: f64) -> Vec<String> {
+    let mut flags = Vec::new();
+    let equity = financial.get(FinancialField::Equity);
+    let revenue = financial.get(FinancialField::Revenue);
+    let net_profit = financial.get(FinancialField::NetProfit);
+    if equity.is_some_and(|value| value < 0.0) {
+        flags.push("negative_equity".to_string());
+    }
+    if revenue.is_some_and(|value| value < 3.0e8) && net_profit.is_some_and(|value| value < 0.0) {
+        flags.push("delisting_combined_rule".to_string());
+    }
+    if market_cap < 5.0e8 {
+        flags.push("market_cap_under_500m".to_string());
+    }
+    if close < 1.0 {
+        flags.push("price_under_1".to_string());
+    }
+    flags
 }
 
 fn latest_price_val(input: &ScreenInput, as_of: NaiveDate) -> Option<&PriceVal> {
@@ -517,7 +706,11 @@ fn latest_price_val(input: &ScreenInput, as_of: NaiveDate) -> Option<&PriceVal> 
         .price_vals
         .iter()
         .filter(|price| price.symbol == input.symbol && price.trade_date <= as_of)
-        .max_by_key(|price| price.trade_date)
+        .max_by(|left, right| {
+            left.trade_date
+                .cmp(&right.trade_date)
+                .then_with(|| source_priority(&right.source).cmp(&source_priority(&left.source)))
+        })
 }
 
 fn has_minimum_history(bars: &[&DailyBar], as_of: NaiveDate, min_years: u32) -> bool {
@@ -528,14 +721,23 @@ fn has_minimum_history(bars: &[&DailyBar], as_of: NaiveDate, min_years: u32) -> 
 }
 
 fn valuation_samples(input: &ScreenInput) -> Vec<ValuationSample> {
-    let mut prices = input
+    let mut prices_by_date = BTreeMap::<NaiveDate, &PriceVal>::new();
+    for price in input
         .price_vals
         .iter()
         .filter(|price| price.symbol == input.symbol && price.trade_date <= input.as_of)
-        .collect::<Vec<_>>();
-    prices.sort_by_key(|price| price.trade_date);
-    prices
-        .into_iter()
+    {
+        prices_by_date
+            .entry(price.trade_date)
+            .and_modify(|current| {
+                if source_priority(&price.source) < source_priority(&current.source) {
+                    *current = price;
+                }
+            })
+            .or_insert(price);
+    }
+    prices_by_date
+        .into_values()
         .filter_map(|price| {
             let periods = financial_periods(&input.financial, price.trade_date);
             let net_profits = periods
@@ -546,8 +748,8 @@ fn valuation_samples(input: &ScreenInput) -> Vec<ValuationSample> {
             let equity = periods
                 .last()
                 .and_then(|record| record.get(FinancialField::Equity));
-            let adjusted_close = adjusted_price(price, &input.adj_factors);
-            let market_cap = adjusted_close * price.total_shares;
+            // 历史估值使用当日不复权收盘价；复权价格只用于收益与技术指标。
+            let market_cap = price.close * price.total_shares;
             Some(ValuationSample {
                 date: price.trade_date,
                 pe_ttm: ttm
@@ -573,7 +775,10 @@ fn financial_periods<'a>(
         by_period
             .entry(record.report_period)
             .and_modify(|current: &mut &FinancialData| {
-                if record.ann_date > current.ann_date {
+                if record.ann_date > current.ann_date
+                    || (record.ann_date == current.ann_date
+                        && source_priority(&record.source) < source_priority(&current.source))
+                {
                     *current = record;
                 }
             })
@@ -634,14 +839,15 @@ fn adjusted_close(bar: &DailyBar, factors: &[AdjFactor]) -> f64 {
     bar.close * factor
 }
 
-fn adjusted_price(price: &PriceVal, factors: &[AdjFactor]) -> f64 {
-    let factor = factors
-        .iter()
-        .filter(|factor| factor.symbol == price.symbol && factor.ex_date <= price.trade_date)
-        .max_by_key(|factor| factor.ex_date)
-        .map(|factor| factor.cum_factor)
-        .unwrap_or(1.0);
-    price.close * factor
+fn source_priority(source: &str) -> u8 {
+    match source {
+        "mootdx" => 0,
+        "tencent" => 1,
+        "tushare" => 2,
+        "baostock" => 3,
+        "akshare" => 4,
+        _ => 100,
+    }
 }
 
 #[cfg(test)]
@@ -655,6 +861,13 @@ mod tests {
             name: None,
             industry: None,
             is_st: false,
+            point_in_time_complete: true,
+            listed_date: None,
+            delisted_date: None,
+            is_suspended: false,
+            price_limit_up: None,
+            price_limit_down: None,
+            trading_status: Vec::new(),
             as_of: NaiveDate::from_ymd_opt(2026, 8, 5).unwrap(),
             bars: Vec::new(),
             price_vals: Vec::new(),

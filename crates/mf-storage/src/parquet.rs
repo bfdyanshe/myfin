@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{Datelike, NaiveDate};
 use duckdb::{params, Connection};
-use mf_core::financial::NoticeKind;
+use mf_core::financial::{FinancialPeriodKind, NoticeKind};
 use mf_core::{AdjFactor, DailyBar, EarningsNotice, FinancialData, FinancialField, PriceVal};
 use mf_datasource::Dataset;
 use thiserror::Error;
@@ -403,6 +403,34 @@ impl ParquetStore {
         Ok(rows.collect::<duckdb::Result<Vec<_>>>()?)
     }
 
+    /// 查询所有标的不复权日线；用于构造全市场截面，日期过滤为闭区间。
+    pub fn query_daily_bars_all(
+        &self,
+        start: Option<NaiveDate>,
+        end: Option<NaiveDate>,
+    ) -> Result<Vec<DailyBar>> {
+        let files = self.parquet_files(Dataset::Daily)?;
+        if files.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut sql = format!(
+            "SELECT symbol, trade_date, open, high, low, close, volume, amount, source
+             FROM read_parquet({}) WHERE 1 = 1",
+            parquet_list(&files)
+        );
+        append_date_filter(&mut sql, "trade_date", start, end);
+        sql.push_str(" ORDER BY symbol, trade_date, source");
+        let connection = Connection::open_in_memory()?;
+        let mut statement = connection.prepare(&sql)?;
+        let rows = match (start, end) {
+            (Some(start), Some(end)) => statement.query_map(params![start, end], daily_bar)?,
+            (Some(start), None) => statement.query_map(params![start], daily_bar)?,
+            (None, Some(end)) => statement.query_map(params![end], daily_bar)?,
+            (None, None) => statement.query_map([], daily_bar)?,
+        };
+        Ok(rows.collect::<duckdb::Result<Vec<_>>>()?)
+    }
+
     /// 查询指定标的的股本与价格派生数据；过滤条件为交易日闭区间。
     pub fn query_price_vals(
         &self,
@@ -430,6 +458,34 @@ impl ParquetStore {
             (Some(start), None) => statement.query_map(params![symbol, start], price_val)?,
             (None, Some(end)) => statement.query_map(params![symbol, end], price_val)?,
             (None, None) => statement.query_map(params![symbol], price_val)?,
+        };
+        Ok(rows.collect::<duckdb::Result<Vec<_>>>()?)
+    }
+
+    /// 查询所有标的的股本与价格派生数据。
+    pub fn query_price_vals_all(
+        &self,
+        start: Option<NaiveDate>,
+        end: Option<NaiveDate>,
+    ) -> Result<Vec<PriceVal>> {
+        let files = self.parquet_files(Dataset::PriceVal)?;
+        if files.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut sql = format!(
+            "SELECT symbol, trade_date, close, total_shares, float_shares, source
+             FROM read_parquet({}) WHERE 1 = 1",
+            parquet_list(&files)
+        );
+        append_date_filter(&mut sql, "trade_date", start, end);
+        sql.push_str(" ORDER BY symbol, trade_date, source");
+        let connection = Connection::open_in_memory()?;
+        let mut statement = connection.prepare(&sql)?;
+        let rows = match (start, end) {
+            (Some(start), Some(end)) => statement.query_map(params![start, end], price_val)?,
+            (Some(start), None) => statement.query_map(params![start], price_val)?,
+            (None, Some(end)) => statement.query_map(params![end], price_val)?,
+            (None, None) => statement.query_map([], price_val)?,
         };
         Ok(rows.collect::<duckdb::Result<Vec<_>>>()?)
     }
@@ -462,6 +518,30 @@ impl ParquetStore {
         Ok(rows.collect::<duckdb::Result<Vec<_>>>()?)
     }
 
+    /// 查询所有标的在截止日前已生效的复权因子。
+    pub fn query_adj_factors_all(&self, end: Option<NaiveDate>) -> Result<Vec<AdjFactor>> {
+        let files = self.parquet_files(Dataset::AdjFactor)?;
+        if files.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut sql = format!(
+            "SELECT symbol, ex_date, cum_factor, source
+             FROM read_parquet({}) WHERE 1 = 1",
+            parquet_list(&files)
+        );
+        if end.is_some() {
+            sql.push_str(" AND ex_date <= ?");
+        }
+        sql.push_str(" ORDER BY symbol, ex_date, source");
+        let connection = Connection::open_in_memory()?;
+        let mut statement = connection.prepare(&sql)?;
+        let rows = match end {
+            Some(end) => statement.query_map(params![end], adj_factor)?,
+            None => statement.query_map([], adj_factor)?,
+        };
+        Ok(rows.collect::<duckdb::Result<Vec<_>>>()?)
+    }
+
     /// 查询指定标的在 as-of 日可见的财务快照。
     pub fn query_financial(&self, symbol: &str, as_of: NaiveDate) -> Result<Vec<FinancialData>> {
         let files = self.parquet_files(Dataset::Financial)?;
@@ -469,7 +549,8 @@ impl ParquetStore {
             return Ok(Vec::new());
         }
         let sql = format!(
-            "SELECT symbol, report_period, ann_date, to_json(fields), source
+            "SELECT symbol, report_period, ann_date, ann_date_is_approx,
+                    report_version, period_kind, to_json(raw_fields), to_json(fields), source
              FROM read_parquet({})
              WHERE symbol = ? AND report_period <= ? AND ann_date <= ?
              ORDER BY report_period, ann_date, source",
@@ -478,6 +559,26 @@ impl ParquetStore {
         let connection = Connection::open_in_memory()?;
         let mut statement = connection.prepare(&sql)?;
         let rows = statement.query_map(params![symbol, as_of, as_of], financial_data)?;
+        Ok(rows.collect::<duckdb::Result<Vec<_>>>()?)
+    }
+
+    /// 查询所有标的在 as-of 日可见的财务快照。
+    pub fn query_financial_all(&self, as_of: NaiveDate) -> Result<Vec<FinancialData>> {
+        let files = self.parquet_files(Dataset::Financial)?;
+        if files.is_empty() {
+            return Ok(Vec::new());
+        }
+        let sql = format!(
+            "SELECT symbol, report_period, ann_date, ann_date_is_approx,
+                    report_version, period_kind, to_json(raw_fields), to_json(fields), source
+             FROM read_parquet({})
+             WHERE report_period <= ? AND ann_date <= ?
+             ORDER BY symbol, report_period, ann_date, source",
+            parquet_list(&files)
+        );
+        let connection = Connection::open_in_memory()?;
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map(params![as_of, as_of], financial_data)?;
         Ok(rows.collect::<duckdb::Result<Vec<_>>>()?)
     }
 
@@ -502,6 +603,26 @@ impl ParquetStore {
         let connection = Connection::open_in_memory()?;
         let mut statement = connection.prepare(&sql)?;
         let rows = statement.query_map(params![symbol, as_of, as_of], earnings_notice)?;
+        Ok(rows.collect::<duckdb::Result<Vec<_>>>()?)
+    }
+
+    /// 查询所有标的在 as-of 日前已披露的业绩预告/快报。
+    pub fn query_earnings_notices_all(&self, as_of: NaiveDate) -> Result<Vec<EarningsNotice>> {
+        let files = self.parquet_files(Dataset::EarningsNotice)?;
+        if files.is_empty() {
+            return Ok(Vec::new());
+        }
+        let sql = format!(
+            "SELECT symbol, ann_date, report_period, kind, net_profit,
+             net_profit_yoy, source
+             FROM read_parquet({})
+             WHERE ann_date <= ? AND report_period <= ?
+             ORDER BY symbol, ann_date, report_period, source",
+            parquet_list(&files)
+        );
+        let connection = Connection::open_in_memory()?;
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map(params![as_of, as_of], earnings_notice)?;
         Ok(rows.collect::<duckdb::Result<Vec<_>>>()?)
     }
 
@@ -694,7 +815,17 @@ fn expected_columns(dataset: Dataset) -> Option<&'static [&'static str]> {
             "source",
         ]),
         Dataset::AdjFactor => Some(&["symbol", "ex_date", "cum_factor", "source"]),
-        Dataset::Financial => Some(&["symbol", "report_period", "ann_date", "fields", "source"]),
+        Dataset::Financial => Some(&[
+            "symbol",
+            "report_period",
+            "ann_date",
+            "ann_date_is_approx",
+            "report_version",
+            "period_kind",
+            "raw_fields",
+            "fields",
+            "source",
+        ]),
         Dataset::EarningsNotice => Some(&[
             "symbol",
             "ann_date",
@@ -821,15 +952,32 @@ fn adj_factor(row: &duckdb::Row<'_>) -> duckdb::Result<AdjFactor> {
 }
 
 fn financial_data(row: &duckdb::Row<'_>) -> duckdb::Result<FinancialData> {
-    let fields_json: String = row.get(3)?;
+    let raw_fields_json: String = row.get(6)?;
+    let raw_fields = parse_financial_fields(&raw_fields_json)
+        .map_err(|error| duckdb::Error::ToSqlConversionFailure(Box::new(error)))?;
+    let fields_json: String = row.get(7)?;
     let fields = parse_financial_fields(&fields_json)
         .map_err(|error| duckdb::Error::ToSqlConversionFailure(Box::new(error)))?;
+    let period_kind = match row.get::<_, String>(5)?.as_str() {
+        "single_quarter" => FinancialPeriodKind::SingleQuarter,
+        "year_to_date" => FinancialPeriodKind::YearToDate,
+        "ttm" => FinancialPeriodKind::Ttm,
+        other => {
+            return Err(duckdb::Error::ToSqlConversionFailure(Box::new(
+                StorageError::Invalid(format!("未知财务期间口径: {other}")),
+            )))
+        }
+    };
     Ok(FinancialData {
         symbol: row.get(0)?,
         report_period: row.get(1)?,
         ann_date: row.get(2)?,
+        ann_date_is_approx: row.get(3)?,
+        report_version: row.get(4)?,
+        period_kind,
+        raw_fields,
         fields,
-        source: row.get(4)?,
+        source: row.get(8)?,
     })
 }
 
@@ -1098,6 +1246,32 @@ mod tests {
     }
 
     #[test]
+    fn keeps_price_val_separate_from_daily_files() {
+        let layout = temp_layout();
+        let store = ParquetStore::new(layout.clone());
+        store
+            .write_price_vals(&[PriceVal {
+                symbol: "600519.SH".to_string(),
+                trade_date: date("2026-08-05"),
+                close: 100.0,
+                total_shares: 1.0e9,
+                float_shares: 8.0e8,
+                source: "test".to_string(),
+            }])
+            .unwrap();
+        assert_eq!(store.row_count(Dataset::PriceVal).unwrap(), 1);
+        assert_eq!(
+            store
+                .query_price_vals_all(None, Some(date("2026-08-05")))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(store.row_count(Dataset::Daily).unwrap(), 0);
+        std::fs::remove_dir_all(layout.root).unwrap();
+    }
+
+    #[test]
     fn parses_financial_fields_from_arrow_json() {
         let fields = parse_financial_fields(
             r#"[{"name":"net_profit","value":100.0},{"name":"debt_ratio","value":0.4}]"#,
@@ -1111,8 +1285,8 @@ mod tests {
             ]
         );
 
-        let wrapped = parse_financial_fields(r#"[{"item":{"name":"equity","value":200.0}}]"#)
-            .unwrap();
+        let wrapped =
+            parse_financial_fields(r#"[{"item":{"name":"equity","value":200.0}}]"#).unwrap();
         assert_eq!(wrapped, vec![(FinancialField::Equity, 200.0)]);
     }
 }

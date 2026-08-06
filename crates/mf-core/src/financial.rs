@@ -1,8 +1,9 @@
 //! 财务数据与业绩预告/快报。
 //!
-//! 免费数据源（Baostock 等）无公告日期字段，as-of 回测按「报告期末 + 约 2 个月」
-//! 近似披露时点（Q1~4-30、H1~8-31、Q3~10-31、年报~次年 4-30），
-//! 精度损失在策略文档中声明（docs/strategy.md）。
+//! 财务快照同时保留规范化单季值与来源原始累计值，避免把半年报/三季报
+//! 的年初至今数据再次相加。公告日优先使用来源真实 `pubDate`；
+//! `ann_date_is_approx` 仅在来源缺少公告日时为 `true`，下游质量门会阻断
+//! 需要严格点时数据的流程。
 
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -34,21 +35,58 @@ pub enum FinancialField {
     DebtRatio,
 }
 
+/// 财务字段的期间口径。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FinancialPeriodKind {
+    /// 已由年初至今值转换得到的单季值，或来源直接给出的单季值。
+    SingleQuarter,
+    /// 来源原始值为年初至今累计值。
+    YearToDate,
+    /// 由最近四个单季值构造的滚动值；通常不直接落库。
+    Ttm,
+}
+
+impl Default for FinancialPeriodKind {
+    fn default() -> Self {
+        Self::SingleQuarter
+    }
+}
+
 /// 单一报告期的财务快照。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FinancialData {
     pub symbol: String,
     /// 报告期（如 `2026-03-31`）
     pub report_period: NaiveDate,
-    /// 披露时点（免费源为近似值，见模块注释）
+    /// 披露时点；若 `ann_date_is_approx` 为真，则这是保守近似值。
     pub ann_date: NaiveDate,
+    /// 是否由报告期末加配置偏移推算，而非来源真实公告日。
+    #[serde(default = "unknown_ann_date_is_approx")]
+    pub ann_date_is_approx: bool,
+    /// 来源报告版本或抓取版本标识，用于修订值去重和追溯。
+    #[serde(default)]
+    pub report_version: Option<String>,
+    /// 规范化后用于因子计算的期间口径。
+    #[serde(default)]
+    pub period_kind: FinancialPeriodKind,
+    /// 来源原始字段；半年报、三季报等累计值必须保留。
+    #[serde(default)]
+    pub raw_fields: Vec<(FinancialField, f64)>,
     pub fields: Vec<(FinancialField, f64)>,
     pub source: String,
 }
 
+fn unknown_ann_date_is_approx() -> bool {
+    true
+}
+
 impl FinancialData {
     pub fn get(&self, field: FinancialField) -> Option<f64> {
-        self.fields.iter().find(|(f, _)| *f == field).map(|(_, v)| *v)
+        self.fields
+            .iter()
+            .find(|(f, _)| *f == field)
+            .map(|(_, v)| *v)
     }
 }
 

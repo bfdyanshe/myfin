@@ -20,7 +20,7 @@ version = 1
 # 1. Baostock —— 财务/估值主源（免费、零注册、稳定）
 #    Python SDK。季频财务 2007+、业绩预告 2003+、快报 2006+、
 #    复权因子、日 K（1990+）。不含北交所；匿名登录，有限频。
-#    财务无公告日期 → ann_date 按报告期末 + ~2 个月近似（screen.toml）。
+#    缺少 pubDate 时才按 screen.toml 的偏移推算，并标记近似公告日。
 # ----------------------------------------------------------
 [[sources]]
 name = "baostock"
@@ -49,7 +49,7 @@ lookback_days = 5
 # ----------------------------------------------------------
 # 2. 腾讯财经 —— 行情备源（HTTP，零鉴权，低封IP风险）
 #    Rust 原生适配器。web.ifzq.gtimg.cn 日K（单次最多 640 根，需分页），
-#    qt.gtimg.cn 实时快照（含 PE/PB/市值，GBK 编码）。无财务。
+#    qt.gtimg.cn 实时快照（含 PE/PB/市值，GBK 编码）。不承接点时股本落库。
 # ----------------------------------------------------------
 [[sources]]
 name = "tencent"
@@ -57,7 +57,7 @@ description = "A股日K（不复权）与实时估值快照，行情备源"
 kind = "http"
 lang = "rust"
 auth = { type = "none" }
-datasets = ["daily", "price_val"]
+datasets = ["daily"]
 notes = """
 行情用 fqkline 接口时注意：腾讯返回的是其自有前复权且仅限近 640 根，
 本仓库一律取不复权段（fqkline 参数不含复权时）或仅用于实时快照；
@@ -132,9 +132,8 @@ lookback_days = 0
 
 # ----------------------------------------------------------
 # 5. mootdx —— 行情主源（通达信 TCP，零鉴权，不封 IP）
-#    Python SDK。计划主源；依赖活跃 fork（mootdx-plus 0.12.0+，
-#    已修北交所 920 号段市场映射）。上游公共服务器轮换/失联时
-#    自动切腾讯/东财。复权需本地 xdxr 除权除息数据，暂不作 adj 主源。
+#    Python SDK。当前由 pyproject/uv.lock 固定版本；上游公共服务器轮换/失联时
+#    自动切腾讯/东财。复权需本地 xdxr 除权除息数据，暂不作 adj 主源；股本由 baostock 负责。
 # ----------------------------------------------------------
 [[sources]]
 name = "mootdx"
@@ -143,7 +142,7 @@ kind = "python_sdk"
 lang = "python"
 package = "myfin_py.sources.mootdx_source"
 auth = { type = "none" }
-datasets = ["daily", "price_val"]
+datasets = ["daily"]
 notes = """
 MVP universe 排除北交所（上游对 BJ 支持不稳定）。
 服务器列表需维护；连接失败时按链 fallback 到 tencent/tushare。
@@ -179,7 +178,7 @@ order = ["baostock", "akshare"]
 
 [chains.price_val]
 dataset = "price_val"
-order = ["mootdx", "tencent"]
+order = ["baostock"]
 
 [chains.macro]
 dataset = "macro"

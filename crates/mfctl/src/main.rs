@@ -18,18 +18,15 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use chrono::{Duration as ChronoDuration, NaiveDate, Utc};
 use clap::{Args, Parser, Subcommand};
+use mf_core::InstrumentSnapshot;
 
 use mf_backtest::{run_historical, BacktestOptions, HistoricalCandidate};
 use mf_datasource::{
     http::HttpAdapter, Dataset, Registry, SourceConfig, SourceKind, DEFAULT_REGISTRY_PATH,
 };
 use mf_report::{backtest_markdown, candidate_markdown, ReportInput};
-use mf_screener::{
-    scan_environment, screen, EnvironmentMember, ScreenInput, ScreenerConfig,
-};
-use mf_storage::{
-    Layout, ParquetStore, StagingManifest, SyncEntry, SyncManifest, SyncStatus,
-};
+use mf_screener::{scan_environment, screen, EnvironmentMember, ScreenInput, ScreenerConfig};
+use mf_storage::{Layout, ParquetStore, StagingManifest, SyncEntry, SyncManifest, SyncStatus};
 
 #[derive(Parser)]
 #[command(
@@ -109,10 +106,24 @@ fn main() -> Result<()> {
 }
 
 fn cmd_sources_list(registry: &Registry) -> Result<()> {
-    println!("数据源注册表 v{} ({} 个源)", registry.version, registry.sources.len());
+    println!(
+        "数据源注册表 v{} ({} 个源)",
+        registry.version,
+        registry.sources.len()
+    );
     println!();
     for s in &registry.sources {
-        println!("- {:<12} {:6} {:10} datasets: {}", s.name, kind_label(s.kind), s.lang, s.datasets.iter().map(|d| d.as_str()).collect::<Vec<_>>().join(","));
+        println!(
+            "- {:<12} {:6} {:10} datasets: {}",
+            s.name,
+            kind_label(s.kind),
+            s.lang,
+            s.datasets
+                .iter()
+                .map(|d| d.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
         if let Some(notes) = &s.notes {
             println!("    notes: {notes}");
         }
@@ -147,32 +158,30 @@ fn cmd_sources_check(registry: &Registry, registry_path: &Path) -> Result<()> {
     let runtime = tokio::runtime::Runtime::new().context("初始化 HTTP 运行时失败")?;
     for source in &registry.sources {
         match source.kind {
-            SourceKind::Http => {
-                match HttpAdapter::from_config(source) {
-                    Ok(adapter) => {
-                        let report = runtime.block_on(adapter.health_check());
-                        if report.ok {
-                            println!(
-                                "OK   {:<12} latency={}ms",
-                                report.source,
-                                report.latency_ms.unwrap_or_default()
-                            );
-                        } else {
-                            println!(
-                                "FAIL {:<12} latency={}ms {}",
-                                report.source,
-                                report.latency_ms.unwrap_or_default(),
-                                report.error.unwrap_or_else(|| "未知错误".to_string())
-                            );
-                            failed += 1;
-                        }
-                    }
-                    Err(error) => {
-                        println!("FAIL {:<12} {}", source.name, error);
+            SourceKind::Http => match HttpAdapter::from_config(source) {
+                Ok(adapter) => {
+                    let report = runtime.block_on(adapter.health_check());
+                    if report.ok {
+                        println!(
+                            "OK   {:<12} latency={}ms",
+                            report.source,
+                            report.latency_ms.unwrap_or_default()
+                        );
+                    } else {
+                        println!(
+                            "FAIL {:<12} latency={}ms {}",
+                            report.source,
+                            report.latency_ms.unwrap_or_default(),
+                            report.error.unwrap_or_else(|| "未知错误".to_string())
+                        );
                         failed += 1;
                     }
                 }
-            }
+                Err(error) => {
+                    println!("FAIL {:<12} {}", source.name, error);
+                    failed += 1;
+                }
+            },
             SourceKind::PythonSdk => {
                 let mut command = ProcessCommand::new(python_executable());
                 command.args([
@@ -194,10 +203,7 @@ fn cmd_sources_check(registry: &Registry, registry_path: &Path) -> Result<()> {
                         }
                     }
                     Err(error) => {
-                        println!(
-                            "FAIL {:<12} 无法启动 Python worker: {error}",
-                            source.name
-                        );
+                        println!("FAIL {:<12} 无法启动 Python worker: {error}", source.name);
                         failed += 1;
                     }
                 }
@@ -231,6 +237,10 @@ struct SyncArgs {
     /// 日线结束日期；不填时由 worker 使用当前日期
     #[arg(long)]
     end: Option<String>,
+
+    /// 财务源没有真实公告日时使用的保守偏移天数
+    #[arg(long, default_value_t = 60)]
+    ann_date_approx_days: i64,
 }
 
 fn add_python_path(command: &mut ProcessCommand) {
@@ -317,6 +327,14 @@ struct ScreenArgs {
     /// 完整 ScreenInput JSON；用于提供全市场与行业估值样本
     #[arg(long)]
     input: Option<PathBuf>,
+
+    /// 运行全市场筛选；使用 --input 时读取 ScreenInput 数组，否则从存储和 --universe 组装。
+    #[arg(long)]
+    all: bool,
+
+    /// 点时股票池快照 JSON；全市场从存储组装时必填。
+    #[arg(long)]
+    universe: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -393,18 +411,11 @@ fn cmd_sync_single(
         .map_err(|error| anyhow::anyhow!(error.to_string()))
         .with_context(|| format!("未知数据集: {}", args.dataset))?;
     if !source.datasets.contains(&dataset) {
-        anyhow::bail!(
-            "数据源 {} 未声明支持数据集 {}",
-            args.source,
-            dataset
-        );
+        anyhow::bail!("数据源 {} 未声明支持数据集 {}", args.source, dataset);
     }
     if source.kind == SourceKind::Http {
         if dataset != Dataset::Daily {
-            anyhow::bail!(
-                "HTTP 源当前只支持 daily，同步数据集 {} 尚未实现",
-                dataset
-            );
+            anyhow::bail!("HTTP 源当前只支持 daily，同步数据集 {} 尚未实现", dataset);
         }
         return cmd_sync_http(layout, source, args);
     }
@@ -414,11 +425,9 @@ fn cmd_sync_single(
             | Dataset::AdjFactor
             | Dataset::Financial
             | Dataset::EarningsNotice
+            | Dataset::PriceVal
     ) {
-        anyhow::bail!(
-            "Python worker 当前不支持数据集 {} 的同步接管",
-            dataset
-        );
+        anyhow::bail!("Python worker 当前不支持数据集 {} 的同步接管", dataset);
     }
 
     let staging_dir = layout
@@ -450,6 +459,15 @@ fn cmd_sync_single(
     } else if args.start.is_some() || args.end.is_some() {
         anyhow::bail!("只有 daily 支持 --start/--end");
     }
+    if args.ann_date_approx_days < 0 {
+        anyhow::bail!("ann-date-approx-days 不能为负数");
+    }
+    if dataset == Dataset::Financial {
+        command.args([
+            "--ann-date-approx-days",
+            &args.ann_date_approx_days.to_string(),
+        ]);
+    }
     add_python_path(&mut command);
 
     let output = command
@@ -458,16 +476,17 @@ fn cmd_sync_single(
     print!("{}", String::from_utf8_lossy(&output.stdout));
     eprint!("{}", String::from_utf8_lossy(&output.stderr));
     if !output.status.success() {
-        anyhow::bail!("Python worker 执行失败，staging 保留在 {}", staging_dir.display());
+        anyhow::bail!(
+            "Python worker 执行失败，staging 保留在 {}",
+            staging_dir.display()
+        );
     }
 
     let manifest_path = staging_dir.join("manifest.jsonl");
     let manifest = StagingManifest::load(&manifest_path)
         .with_context(|| format!("读取 staging manifest 失败: {}", manifest_path.display()))?;
     let matched = manifest.entries().iter().find(|entry| {
-        entry.dataset == dataset
-            && entry.source == args.source
-            && entry.symbol == args.symbol
+        entry.dataset == dataset && entry.source == args.source && entry.symbol == args.symbol
     });
     let Some(entry) = matched else {
         anyhow::bail!(
@@ -485,7 +504,11 @@ fn cmd_sync_single(
 
     let parquet_dir = staging_dir.join(dataset.as_str());
     let parquet_file = single_parquet_file(&parquet_dir)?;
-    let file_stem = format!("{}-{}", safe_component(&args.source), safe_component(&args.symbol));
+    let file_stem = format!(
+        "{}-{}",
+        safe_component(&args.source),
+        safe_component(&args.symbol)
+    );
     let store = ParquetStore::new(layout.clone());
     let paths = store.ingest_parquet_by_year(dataset, &file_stem, &parquet_file)?;
     let date_counts = store.staging_date_counts(dataset, &parquet_file)?;
@@ -657,6 +680,35 @@ fn cmd_verify(layout: &Layout, args: VerifyArgs) -> Result<()> {
 fn cmd_screen(layout: &Layout, args: ScreenArgs) -> Result<()> {
     let config = ScreenerConfig::load(&args.config)
         .with_context(|| format!("加载筛选配置 {} 失败", args.config.display()))?;
+    if args.all {
+        let as_of = args
+            .as_of
+            .as_deref()
+            .map(|value| parse_cli_date(value, "as-of"))
+            .transpose()?
+            .context("全市场筛选必须指定 --as-of")?;
+        let inputs = if let Some(path) = args.input {
+            let raw = std::fs::read_to_string(&path)
+                .with_context(|| format!("读取全市场筛选输入 {} 失败", path.display()))?;
+            serde_json::from_str::<Vec<ScreenInput>>(&raw)
+                .with_context(|| format!("解析全市场筛选输入 {} 失败", path.display()))?
+        } else {
+            let universe = args
+                .universe
+                .as_deref()
+                .context("全市场从存储组装时必须指定 --universe")?;
+            build_screen_inputs_from_store(layout, universe, as_of)?
+        };
+        validate_screen_inputs(&inputs, as_of)?;
+        let inputs = attach_environment(inputs, as_of, &config);
+        let results = mf_screener::screen_universe(&inputs, &config);
+        println!("{}", serde_json::to_string_pretty(&results)?);
+        return Ok(());
+    }
+
+    if args.universe.is_some() {
+        anyhow::bail!("--universe 只能与 --all 一起使用");
+    }
     let input = if let Some(path) = args.input {
         let raw = std::fs::read_to_string(&path)
             .with_context(|| format!("读取筛选输入 {} 失败", path.display()))?;
@@ -679,6 +731,13 @@ fn cmd_screen(layout: &Layout, args: ScreenArgs) -> Result<()> {
             name: None,
             industry: None,
             is_st: false,
+            point_in_time_complete: false,
+            listed_date: None,
+            delisted_date: None,
+            is_suspended: false,
+            price_limit_up: None,
+            price_limit_down: None,
+            trading_status: Vec::new(),
             as_of,
             bars: store.query_daily_bars(symbol, None, Some(as_of))?,
             price_vals: store.query_price_vals(symbol, None, Some(as_of))?,
@@ -708,6 +767,139 @@ fn cmd_screen(layout: &Layout, args: ScreenArgs) -> Result<()> {
     Ok(())
 }
 
+fn build_screen_inputs_from_store(
+    layout: &Layout,
+    universe_path: &Path,
+    as_of: NaiveDate,
+) -> Result<Vec<ScreenInput>> {
+    let raw = std::fs::read_to_string(universe_path)
+        .with_context(|| format!("读取点时股票池 {} 失败", universe_path.display()))?;
+    let snapshots = serde_json::from_str::<Vec<InstrumentSnapshot>>(&raw)
+        .with_context(|| format!("解析点时股票池 {} 失败", universe_path.display()))?;
+    if snapshots.is_empty() {
+        anyhow::bail!("点时股票池为空，拒绝运行全市场筛选");
+    }
+    let mut latest = BTreeMap::<String, InstrumentSnapshot>::new();
+    for snapshot in snapshots {
+        if snapshot.effective_date > as_of {
+            continue;
+        }
+        let replace = latest
+            .get(&snapshot.symbol)
+            .is_none_or(|current| current.effective_date <= snapshot.effective_date);
+        if replace {
+            latest.insert(snapshot.symbol.clone(), snapshot);
+        }
+    }
+    if latest.is_empty() {
+        anyhow::bail!("点时股票池在 {} 没有可用快照", as_of);
+    }
+
+    let store = ParquetStore::new(layout.clone());
+    let mut bars = BTreeMap::<String, Vec<_>>::new();
+    for row in store.query_daily_bars_all(None, Some(as_of))? {
+        bars.entry(row.symbol.clone()).or_default().push(row);
+    }
+    let mut prices = BTreeMap::<String, Vec<_>>::new();
+    for row in store.query_price_vals_all(None, Some(as_of))? {
+        prices.entry(row.symbol.clone()).or_default().push(row);
+    }
+    let mut factors = BTreeMap::<String, Vec<_>>::new();
+    for row in store.query_adj_factors_all(Some(as_of))? {
+        factors.entry(row.symbol.clone()).or_default().push(row);
+    }
+    let mut financial = BTreeMap::<String, Vec<_>>::new();
+    for row in store.query_financial_all(as_of)? {
+        financial.entry(row.symbol.clone()).or_default().push(row);
+    }
+    let mut earnings = BTreeMap::<String, Vec<_>>::new();
+    for row in store.query_earnings_notices_all(as_of)? {
+        earnings.entry(row.symbol.clone()).or_default().push(row);
+    }
+
+    Ok(latest
+        .into_values()
+        .map(|snapshot| ScreenInput {
+            symbol: snapshot.symbol.clone(),
+            name: snapshot.name,
+            industry: snapshot.industry,
+            is_st: snapshot.is_st,
+            point_in_time_complete: true,
+            listed_date: Some(snapshot.listed_date),
+            delisted_date: snapshot.delisted_date,
+            is_suspended: snapshot.is_suspended,
+            price_limit_up: snapshot.price_limit_up,
+            price_limit_down: snapshot.price_limit_down,
+            trading_status: Vec::new(),
+            as_of,
+            bars: bars.remove(&snapshot.symbol).unwrap_or_default(),
+            price_vals: prices.remove(&snapshot.symbol).unwrap_or_default(),
+            adj_factors: factors.remove(&snapshot.symbol).unwrap_or_default(),
+            financial: financial.remove(&snapshot.symbol).unwrap_or_default(),
+            earnings: earnings.remove(&snapshot.symbol).unwrap_or_default(),
+            market_pe_samples: Vec::new(),
+            market_pb_samples: Vec::new(),
+            industry_pe_samples: Vec::new(),
+            industry_pb_samples: Vec::new(),
+            environment: None,
+        })
+        .collect())
+}
+
+fn validate_screen_inputs(inputs: &[ScreenInput], as_of: NaiveDate) -> Result<()> {
+    if inputs.is_empty() {
+        anyhow::bail!("全市场筛选输入为空，拒绝生成空结果");
+    }
+    let mut symbols = BTreeSet::new();
+    for input in inputs {
+        if input.as_of != as_of {
+            anyhow::bail!("全市场输入的 as-of 不一致: {} != {}", input.symbol, as_of);
+        }
+        if !input.point_in_time_complete {
+            anyhow::bail!(
+                "{} 缺少 point_in_time_complete，阻断全市场筛选",
+                input.symbol
+            );
+        }
+        if !symbols.insert(input.symbol.clone()) {
+            anyhow::bail!("全市场输入包含重复标的 {}", input.symbol);
+        }
+    }
+    Ok(())
+}
+
+fn attach_environment(
+    mut inputs: Vec<ScreenInput>,
+    as_of: NaiveDate,
+    config: &ScreenerConfig,
+) -> Vec<ScreenInput> {
+    let members = inputs
+        .iter()
+        .filter_map(|input| {
+            input.industry.clone().map(|industry| EnvironmentMember {
+                symbol: input.symbol.clone(),
+                industry,
+                bars: input.bars.clone(),
+                adj_factors: input.adj_factors.clone(),
+                financial: input.financial.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let summaries = scan_environment(&members, as_of, &config.environment);
+    for input in &mut inputs {
+        input.environment = input
+            .industry
+            .as_deref()
+            .and_then(|industry| {
+                summaries
+                    .iter()
+                    .find(|summary| summary.industry == industry)
+            })
+            .cloned();
+    }
+    inputs
+}
+
 fn cmd_environment(layout: &Layout, args: EnvironmentArgs) -> Result<()> {
     let config = ScreenerConfig::load(&args.config)
         .with_context(|| format!("加载筛选配置 {} 失败", args.config.display()))?;
@@ -723,14 +915,17 @@ fn cmd_environment(layout: &Layout, args: EnvironmentArgs) -> Result<()> {
     if summaries.is_empty() {
         anyhow::bail!("环境扫描输入没有带行业字段的成员");
     }
-    let output = args.out.unwrap_or_else(|| {
-        layout.context_path(&format!("environment-{as_of}.json"))
-    });
+    let output = args
+        .out
+        .unwrap_or_else(|| layout.context_path(&format!("environment-{as_of}.json")));
     if let Some(parent) = output.parent() {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&output, serde_json::to_string_pretty(&summaries)?)?;
-    let tagged = summaries.iter().filter(|summary| !summary.tags.is_empty()).count();
+    let tagged = summaries
+        .iter()
+        .filter(|summary| !summary.tags.is_empty())
+        .count();
     println!(
         "ENVIRONMENT: {} 个行业，{} 个行业生成标签；结果 {}",
         summaries.len(),
@@ -753,6 +948,27 @@ fn cmd_backtest(layout: &Layout, args: BacktestArgs) -> Result<()> {
     if candidates.is_empty() {
         anyhow::bail!("回测输入没有候选标的");
     }
+    let mut symbols = BTreeSet::new();
+    for candidate in &candidates {
+        if !candidate.input.point_in_time_complete {
+            anyhow::bail!(
+                "{} 缺少点时股票池快照，回测质量门阻断",
+                candidate.input.symbol
+            );
+        }
+        if config.portfolio.require_trade_status && candidate.input.trading_status.is_empty() {
+            anyhow::bail!(
+                "{} 缺少逐交易日停牌/涨跌停状态，回测质量门阻断",
+                candidate.input.symbol
+            );
+        }
+        if !symbols.insert(candidate.input.symbol.clone()) {
+            anyhow::bail!("回测输入包含重复标的 {}", candidate.input.symbol);
+        }
+    }
+    if args.hold_months == 0 {
+        anyhow::bail!("hold-months 必须大于 0");
+    }
     let start = args
         .start
         .as_deref()
@@ -773,13 +989,16 @@ fn cmd_backtest(layout: &Layout, args: BacktestArgs) -> Result<()> {
         end,
         hold_months: args.hold_months,
         include_sensitivity: !args.no_sensitivity,
+        execution_lag_trading_days: config.portfolio.execution_lag_trading_days,
+        max_positions: config.portfolio.max_positions,
+        max_industry_weight: config.portfolio.max_industry_weight,
+        transaction_cost_bps: config.portfolio.transaction_cost_bps,
+        slippage_bps: config.portfolio.slippage_bps,
+        min_entry_amount: config.portfolio.min_entry_amount,
     };
     let report = run_historical(&candidates, &config, &options);
     let output = args.out.unwrap_or_else(|| {
-        layout.report_path(&format!(
-            "backtest-{}.md",
-            Utc::now().format("%Y%m%d")
-        ))
+        layout.report_path(&format!("backtest-{}.md", Utc::now().format("%Y%m%d")))
     });
     if let Some(parent) = output.parent() {
         std::fs::create_dir_all(parent)?;
@@ -861,8 +1080,17 @@ fn cmd_doctor(layout: &Layout) -> Result<()> {
     println!("报告目录: {}", layout.reports_dir().display());
     println!("环境上下文: {}", layout.context_dir().display());
     let store = ParquetStore::new(layout.clone());
+    let mut empty_required = Vec::new();
     for dataset in Dataset::ALL {
-        println!("数据集 {:<16} {} 行", dataset, store.row_count(dataset)?);
+        let rows = store.row_count(dataset)?;
+        println!("数据集 {:<16} {} 行", dataset, rows);
+        if matches!(
+            dataset,
+            Dataset::Daily | Dataset::PriceVal | Dataset::Financial
+        ) && rows == 0
+        {
+            empty_required.push(dataset);
+        }
     }
     let (daily_rows, invalid_daily_rows) = store.daily_quality()?;
     println!(
@@ -871,6 +1099,50 @@ fn cmd_doctor(layout: &Layout) -> Result<()> {
     );
     if invalid_daily_rows > 0 {
         anyhow::bail!("日线质量检查失败：发现 {} 行异常数据", invalid_daily_rows);
+    }
+    if !empty_required.is_empty() {
+        anyhow::bail!(
+            "核心数据集为空，质量门阻断：{}",
+            empty_required
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    let mut blocking = Vec::new();
+    for dataset in Dataset::ALL {
+        let manifest_path = layout.manifest_path(dataset);
+        let manifest = SyncManifest::load(&manifest_path).with_context(|| {
+            format!(
+                "读取 {} manifest 失败: {}",
+                dataset,
+                manifest_path.display()
+            )
+        })?;
+        for entry in manifest.blocking_entries() {
+            blocking.push(format!(
+                "{}/{}/{}: {:?} {}",
+                entry.dataset,
+                entry.source,
+                entry.trade_date,
+                entry.status,
+                entry.note.clone().unwrap_or_default()
+            ));
+        }
+        for entry in manifest.row_count_anomalies(10.0) {
+            blocking.push(format!(
+                "{}/{}/{}: rows={} 相对中位数异常",
+                entry.dataset, entry.source, entry.trade_date, entry.rows
+            ));
+        }
+    }
+    if !blocking.is_empty() {
+        println!("同步质量门：{} 条阻断记录", blocking.len());
+        for entry in blocking.iter().take(20) {
+            println!("  {entry}");
+        }
+        anyhow::bail!("同步 manifest 存在失败或部分成功记录，必须重试后再运行策略");
     }
     Ok(())
 }

@@ -1,6 +1,6 @@
 # myfin 架构
 
-> 状态：v1（对应 M1 骨架已完成，M2 起逐步落地）· 数据源：`docs/data-sources.md` ·
+> 状态：v1（M1-M6 已落地）· 数据源：`docs/data-sources.md` ·
 > 策略：`docs/strategy.md`。文中标注「M2/M3/M4」的为里程碑计划，见第 9 节。
 
 ## 1. 总览
@@ -90,7 +90,8 @@ flowchart LR
    staging manifest，只接管 `done` 记录，再由 `ParquetStore::ingest_parquet_by_year`
    重新编码到 `data/` 对应目录；同步状态写入落库 manifest。
 3. **Parquet → 查询**（M2）：`mf-storage::ParquetStore` 使用 DuckDB 读取数据集，支持按年分区、幂等合并和日线查询；SQLite 可选用于小表。
-4. **流水线**：`mf-screener` 按 `config/screen.toml` 参数执行六阶段，产出候选清单。
+4. **流水线**：`mfctl screen --all --as-of DATE --universe snapshots.json` 读取全量行情、股本、复权、财务和公告，
+   按点时股票池构造截面，自动生成行业环境摘要，再由 `mf-screener` 按 `config/screen.toml` 执行六阶段。
 5. **报告**：`mf-report` 渲染 Markdown 到 `data/reports/`。
 
 ## 4. 存储布局
@@ -102,7 +103,7 @@ flowchart LR
 data/
 ├── market/
 │   ├── daily/           不复权日 K（OHLCV，按年分文件 market/daily/<year>/）
-│   │                     price_val（股本）也落在本目录（Dataset::dir 约定）
+│   ├── price_val/        点时总股本/流通股本与不复权收盘价
 │   └── adj_factor/      复权因子（后复权累计因子，baostock 主源）
 ├── financial/           季频财务快照 + 业绩预告/快报（按年分文件）
 ├── macro/               宏观指标（akshare，辅助）
@@ -197,7 +198,7 @@ flowchart LR
 | `sources list` | 列出注册表源与优先级链 | ✅ M1 已实现 |
 | `sources check` | 全源健康检查（基准股探针） | M3：Python + Rust HTTP 已接入 |
 | `sync` | 增量同步单源单标的数据 | M3：Python SDK + Rust HTTP daily 已接入 |
-| `screen` | 运行选股流水线 | M4 实现 |
+| `screen` | 运行单标的或全市场选股流水线 | M4：`--all` + 点时股票池编排 |
 | `environment` | 按行业计算相对收益与盈利趋势标签 | M5：输入驱动实现 |
 | `report` | 生成候选与数据质量 Markdown 报告 | M5（JSON 输入已接入） |
 | `doctor` | 数据目录健康审计（目录统计） | ✅ M1 已实现 |
@@ -211,7 +212,7 @@ flowchart LR
 所有因子计算的时点纪律（防前视偏差，规格见 `docs/strategy.md` §8.4）：
 
 - 配置：`as_of.ann_date_approx_days = 60`（`config/screen.toml`）；
-- 财务数据按 `ann_date`（报告期末 + 60 天近似）过滤，只有 `ann_date <= as_of` 的快照可被使用；
+- 财务数据按真实 `pubDate` 对应的 `ann_date` 过滤；缺失公告日的快照带近似标记，严格配置下不可使用；
 - 分位/动量/均线等时间窗因子一律以 as-of 日收盘为窗口末端；
 - 该模块由 `mf-screener` 在 M4 实现，回测与实盘共用同一 as-of 逻辑，杜绝「回测能用未来数据」。
 
@@ -223,8 +224,8 @@ flowchart LR
    `volume >= 0`、`amount >= 0`；违例记录并标记该 `(source, date)` 为 `partial`。
 2. **跨源抽样对账**：`mfctl verify` 对同一标的同一交易日取 2 个源（如 mootdx vs 腾讯）的收盘价
    抽样比对，偏差超阈值（如 0.1%）即告警——用于抓前复权/字段错位类系统性错误。
-3. **行数骤变**：manifest 的 `rows` 与相邻日期对比目前仍是待补质量门，
-   尚未自动阻断数据进入流水线。
+3. **行数骤变**：`SyncManifest::row_count_anomalies` 以同源中位行数为基准检查极端变化，
+   `mfctl doctor` 会在失败、部分成功或骤变时阻断策略流程。
 
 质量门结果进入报告的数据质量页（`mf-report` 的 `SourceHealthLine`）。
 
@@ -235,9 +236,9 @@ flowchart LR
 | M1 | workspace 骨架、mf-core 领域模型、注册表、布局 + manifest、CLI 骨架、Python worker 三源、docs + skill | ✅ 完成（fd92776） |
 | M2 | 存储层：Parquet 写入 + DuckDB 查询引擎（SQLite 可选） | ✅ 完成 |
 | M3 | 数据源适配器（Rust HTTP 两源）、增量同步、`sources check`/`sync`/`verify` | ✅ 完成 |
-| M4 | 选股流水线 + as-of 模块 + 月度截面重建回测（`screen`/`backtest`） | 进行中：筛选与 JSON 输入回测已接入 |
-| M5 | 报告完善（候选清单 + 数据质量页）、环境扫描 context 流程 | 进行中：报告与输入驱动环境扫描已接入 |
-| M6 | 硬化：熔断/重试打磨、质量门补全、文档收尾 | 待做 |
+| M4 | 选股流水线 + as-of 模块 + 月度截面重建回测（`screen`/`backtest`） | ✅ 完成：支持全市场编排、固定成交规则与成本后组合指标 |
+| M5 | 报告完善（候选清单 + 数据质量页）、环境扫描 context 流程 | ✅ 完成：环境、风险、样本外、消融与质量状态均输出 |
+| M6 | 硬化：熔断/重试打磨、质量门补全、文档收尾 | ✅ 完成 |
 
 ## 12. 仓库布局
 

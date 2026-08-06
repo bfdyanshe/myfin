@@ -1,5 +1,6 @@
 //! 选股参数配置（`config/screen.toml`）。
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,52 @@ pub struct ScreenerConfig {
     pub undervalued: UndervaluedCfg,
     pub exclusion: ExclusionCfg,
     pub recovery: RecoveryCfg,
+    #[serde(default)]
+    pub portfolio: PortfolioCfg,
+}
+
+/// 月频组合与成交规则。固定规则比运行时自由选择更容易复现。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortfolioCfg {
+    /// 信号日为每月最后一个交易日。
+    pub signal_at_month_end: bool,
+    /// 信号日后的第几个可交易日成交；默认 1 表示下一交易日。
+    pub execution_lag_trading_days: u32,
+    /// 单个调仓批次最多持仓数，超出按标的代码稳定排序截断。
+    pub max_positions: u32,
+    /// 单行业权重上限；超出的名额进入现金。
+    pub max_industry_weight: f64,
+    /// 单边交易成本（基点）。
+    pub transaction_cost_bps: f64,
+    /// 单边滑点（基点）。
+    pub slippage_bps: f64,
+    /// 成交额低于该值的标的不成交；0 表示不启用容量门。
+    pub min_entry_amount: f64,
+    /// 是否允许没有候选时持有现金。
+    pub allow_cash: bool,
+    /// v1 回测固定持有期，不在组合引擎中混入提前退出。
+    #[serde(default)]
+    pub exit_on_signal_loss: bool,
+    /// 是否要求回测输入提供逐交易日停牌/涨跌停状态。
+    #[serde(default)]
+    pub require_trade_status: bool,
+}
+
+impl Default for PortfolioCfg {
+    fn default() -> Self {
+        Self {
+            signal_at_month_end: true,
+            execution_lag_trading_days: 1,
+            max_positions: 20,
+            max_industry_weight: 0.25,
+            transaction_cost_bps: 5.0,
+            slippage_bps: 5.0,
+            min_entry_amount: 0.0,
+            allow_cash: true,
+            exit_on_signal_loss: false,
+            require_trade_status: true,
+        }
+    }
 }
 
 /// 环境归因参数；标签只用于解释和排序，不作为买卖开关。
@@ -58,12 +105,17 @@ impl Default for EnvironmentCfg {
 /// as-of 日期：所有因子只使用该日及之前可知的数据（防前视偏差）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AsOfCfg {
-    /// 报告期末 + 约 2 个月作为财务近似披露时点（免费源无公告日期）
+    /// 缺少真实公告日时使用的保守偏移天数；严格流程默认拒绝近似值。
     pub ann_date_approx_days: i64,
+    /// 严格回测/全市场流程是否拒绝没有真实公告日的财务快照。
+    #[serde(default)]
+    pub require_real_ann_date: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UniverseCfg {
+    /// 是否要求输入带有历史股票池快照。自动全市场流程必须开启。
+    pub require_point_in_time: bool,
     /// 排除北交所（免费数据源不支持）
     pub exclude_bse: bool,
     /// 排除 ST/*ST（名称含 ST 或退市风险旗标）
@@ -92,10 +144,16 @@ pub struct ExclusionCfg {
     pub max_consecutive_loss_quarters: u32,
     /// 经营现金流为负的最大季数
     pub max_neg_cashflow_quarters: u32,
+    /// 是否要求最近四个报告期均有经营现金流字段；缺失即阻断。
+    #[serde(default)]
+    pub require_oper_cash_flow: bool,
     /// 资产负债率上限
     pub max_debt_ratio: f64,
     /// 净资产 < 0 直接出池
     pub exclude_negative_equity: bool,
+    /// 行业化负债率上限；未列出的行业使用 `max_debt_ratio`。
+    #[serde(default)]
+    pub industry_debt_ratio: BTreeMap<String, f64>,
 }
 
 /// 回升确认（右则确认）。
@@ -111,6 +169,9 @@ pub struct RecoveryCfg {
     pub ma_days: u32,
     /// 量能回升：近 20 日均额 / 前 60 日均额下限
     pub volume_ratio_min: f64,
+    /// 通过主信号后至少满足的辅信号数，冻结“回升”定义。
+    #[serde(default)]
+    pub min_secondary_signals: u8,
 }
 
 impl ScreenerConfig {
@@ -125,8 +186,15 @@ impl ScreenerConfig {
     }
 
     pub fn validate(&self) -> Result<(), Error> {
+        if self.as_of.ann_date_approx_days < 0 {
+            return Err(Error::Config(
+                "as_of.ann_date_approx_days 不能为负数".into(),
+            ));
+        }
         if self.environment.return_window_days == 0 {
-            return Err(Error::Config("environment.return_window_days 必须大于 0".into()));
+            return Err(Error::Config(
+                "environment.return_window_days 必须大于 0".into(),
+            ));
         }
         if self.environment.profit_trend_quarters == 0 {
             return Err(Error::Config(
@@ -142,13 +210,102 @@ impl ScreenerConfig {
             ));
         }
         if !(0.0..1.0).contains(&self.undervalued.percentile_max) {
-            return Err(Error::Config("undervalued.percentile_max 必须在 (0,1)".into()));
+            return Err(Error::Config(
+                "undervalued.percentile_max 必须在 (0,1)".into(),
+            ));
         }
         if !(0.0..1.0).contains(&self.recovery.percent_3m_ago_max) {
-            return Err(Error::Config("recovery.percent_3m_ago_max 必须在 (0,1)".into()));
+            return Err(Error::Config(
+                "recovery.percent_3m_ago_max 必须在 (0,1)".into(),
+            ));
         }
         if self.exclusion.max_debt_ratio <= 0.0 || self.exclusion.max_debt_ratio > 1.0 {
-            return Err(Error::Config("exclusion.max_debt_ratio 必须在 (0,1]".into()));
+            return Err(Error::Config(
+                "exclusion.max_debt_ratio 必须在 (0,1]".into(),
+            ));
+        }
+        if self
+            .exclusion
+            .industry_debt_ratio
+            .values()
+            .any(|value| !value.is_finite() || *value <= 0.0 || *value > 1.0)
+        {
+            return Err(Error::Config(
+                "exclusion.industry_debt_ratio 必须全部在 (0,1]".into(),
+            ));
+        }
+        if self.universe.min_list_years == 0 {
+            return Err(Error::Config("universe.min_list_years 必须大于 0".into()));
+        }
+        if !self.universe.min_market_cap.is_finite() || self.universe.min_market_cap < 0.0 {
+            return Err(Error::Config(
+                "universe.min_market_cap 必须是非负有限数".into(),
+            ));
+        }
+        if !self.universe.min_avg_amount.is_finite() || self.universe.min_avg_amount < 0.0 {
+            return Err(Error::Config(
+                "universe.min_avg_amount 必须是非负有限数".into(),
+            ));
+        }
+        if self.undervalued.percentile_window_days == 0 {
+            return Err(Error::Config(
+                "undervalued.percentile_window_days 必须大于 0".into(),
+            ));
+        }
+        if self.recovery.momentum_days == 0 || self.recovery.ma_days == 0 {
+            return Err(Error::Config(
+                "recovery.momentum_days 与 ma_days 必须大于 0".into(),
+            ));
+        }
+        if !self.recovery.volume_ratio_min.is_finite() || self.recovery.volume_ratio_min < 0.0 {
+            return Err(Error::Config(
+                "recovery.volume_ratio_min 必须是非负有限数".into(),
+            ));
+        }
+        if self.recovery.min_secondary_signals > 4 {
+            return Err(Error::Config(
+                "recovery.min_secondary_signals 不能大于 4".into(),
+            ));
+        }
+        if !self.portfolio.signal_at_month_end {
+            return Err(Error::Config(
+                "portfolio.signal_at_month_end 必须为 true".into(),
+            ));
+        }
+        if self.portfolio.exit_on_signal_loss {
+            return Err(Error::Config(
+                "portfolio.exit_on_signal_loss 当前必须为 false，避免与固定持有期冲突".into(),
+            ));
+        }
+        if self.portfolio.execution_lag_trading_days == 0 {
+            return Err(Error::Config(
+                "portfolio.execution_lag_trading_days 必须大于 0".into(),
+            ));
+        }
+        if self.portfolio.max_positions == 0 {
+            return Err(Error::Config("portfolio.max_positions 必须大于 0".into()));
+        }
+        if !(0.0..=1.0).contains(&self.portfolio.max_industry_weight)
+            || self.portfolio.max_industry_weight == 0.0
+        {
+            return Err(Error::Config(
+                "portfolio.max_industry_weight 必须在 (0,1]".into(),
+            ));
+        }
+        for (name, value) in [
+            (
+                "portfolio.transaction_cost_bps",
+                self.portfolio.transaction_cost_bps,
+            ),
+            ("portfolio.slippage_bps", self.portfolio.slippage_bps),
+            (
+                "portfolio.min_entry_amount",
+                self.portfolio.min_entry_amount,
+            ),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                return Err(Error::Config(format!("{name} 必须是非负有限数")));
+            }
         }
         Ok(())
     }

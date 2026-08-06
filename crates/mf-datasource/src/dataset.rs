@@ -50,7 +50,7 @@ impl Dataset {
             Dataset::AdjFactor => "market/adj_factor",
             Dataset::Financial => "financial",
             Dataset::EarningsNotice => "financial",
-            Dataset::PriceVal => "market/daily",
+            Dataset::PriceVal => "market/price_val",
             Dataset::Macro => "macro",
         }
     }

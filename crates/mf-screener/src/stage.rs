@@ -7,7 +7,6 @@
 /// - exclude_bad: 财务健康旗标
 /// - recovery: 回升信号评分
 /// - output: 候选清单
-
 use std::fmt;
 
 /// 流水线阶段序号。

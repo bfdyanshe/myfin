@@ -45,7 +45,10 @@ pub struct Symbol {
 
 impl Symbol {
     pub fn new(code: impl Into<String>, exchange: Exchange) -> Self {
-        Self { code: code.into(), exchange }
+        Self {
+            code: code.into(),
+            exchange,
+        }
     }
 
     /// 根据 6 位代码推断交易所/市场（沪深京通用规则）。
@@ -105,8 +108,14 @@ mod tests {
     #[test]
     fn infer_exchange() {
         assert_eq!(Symbol::from_code("600519").unwrap().exchange, Exchange::Sse);
-        assert_eq!(Symbol::from_code("000001").unwrap().exchange, Exchange::Szse);
-        assert_eq!(Symbol::from_code("300750").unwrap().exchange, Exchange::Szse);
+        assert_eq!(
+            Symbol::from_code("000001").unwrap().exchange,
+            Exchange::Szse
+        );
+        assert_eq!(
+            Symbol::from_code("300750").unwrap().exchange,
+            Exchange::Szse
+        );
         assert_eq!(Symbol::from_code("430047").unwrap().exchange, Exchange::Bse);
         assert!(Symbol::from_code("123456").is_none());
     }
@@ -114,8 +123,14 @@ mod tests {
     #[test]
     fn infer_market() {
         assert_eq!(Symbol::from_code("688981").unwrap().market(), Market::Star);
-        assert_eq!(Symbol::from_code("600519").unwrap().market(), Market::MainSse);
-        assert_eq!(Symbol::from_code("300750").unwrap().market(), Market::ChiNext);
+        assert_eq!(
+            Symbol::from_code("600519").unwrap().market(),
+            Market::MainSse
+        );
+        assert_eq!(
+            Symbol::from_code("300750").unwrap().market(),
+            Market::ChiNext
+        );
         assert_eq!(Symbol::from_code("430047").unwrap().market(), Market::Bse);
     }
 }

@@ -42,7 +42,12 @@ pub trait Source: Send + Sync {
     async fn health_check(&self) -> HealthReport;
 
     /// 拉取不复权日 K。
-    async fn fetch_daily(&self, symbol: &str, start: chrono::NaiveDate, end: chrono::NaiveDate) -> Result<Vec<DailyBar>>;
+    async fn fetch_daily(
+        &self,
+        symbol: &str,
+        start: chrono::NaiveDate,
+        end: chrono::NaiveDate,
+    ) -> Result<Vec<DailyBar>>;
 
     /// 拉取复权因子。
     async fn fetch_adj_factor(&self, symbol: &str) -> Result<Vec<AdjFactor>>;
@@ -54,5 +59,10 @@ pub trait Source: Send + Sync {
     async fn fetch_earnings_notice(&self, symbol: &str) -> Result<Vec<EarningsNotice>>;
 
     /// 拉取行情派生价格数据（股本等，用于自算估值）。
-    async fn fetch_price_val(&self, symbol: &str, start: chrono::NaiveDate, end: chrono::NaiveDate) -> Result<Vec<PriceVal>>;
+    async fn fetch_price_val(
+        &self,
+        symbol: &str,
+        start: chrono::NaiveDate,
+        end: chrono::NaiveDate,
+    ) -> Result<Vec<PriceVal>>;
 }

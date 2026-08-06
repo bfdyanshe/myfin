@@ -23,10 +23,10 @@
 | 源 | kind | lang | 鉴权 | min_interval | 上限 | backoff | 数据集 | 探针 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | baostock | python_sdk | python | 无 | 300 ms | 无 | 30 s | daily, adj_factor, financial, earnings_notice, price_val | `sh.600519` / 5 日 |
-| tencent | http | rust | 无 | 500 ms | 无 | 15 s | daily, price_val | `sh600519` / 5 日 |
+| tencent | http | rust | 无 | 500 ms | 无 | 15 s | daily | `sh600519` / 5 日 |
 | tushare | http | rust | token（`TUSHARE_TOKEN`） | 1200 ms | 50/min、8000/day | 60 s | daily | `600519.SH` / 5 日 |
 | akshare | python_sdk | python | 无 | 5000 ms | 无 | 120 s | macro, earnings_notice | 空 / 0 日 |
-| mootdx | python_sdk | python | 无 | 100 ms | 无 | 10 s | daily, price_val | `600519` / 5 日 |
+| mootdx | python_sdk | python | 无 | 100 ms | 无 | 10 s | daily | `600519` / 5 日 |
 
 注：`probe` 的 `symbol` 各源格式不同（`sh.600519` / `sh600519` / `600519.SH` / `600519`），
 是各源 SDK 自身约定的输入格式，统一化在适配器层完成（`Symbol::from_code` + `ts_code()`）。
@@ -42,7 +42,7 @@
   - 财务字段映射到 `FinancialField`：`revenue/net_profit/equity/total_liabilities/oper_cash_flow/
     eps/bps/roe/gross_margin`；`net_profit` 取 `profit_net_ratio` 列；
   - 单连接非线程安全：worker 内串行 + 显式 `bs.logout()`。
-- 已知限制：不含北交所；财务无公告日期（`ann_date` 按报告期末 + 60 天近似，`config/screen.toml`）。
+- 已知限制：不含北交所；缺少 `pubDate` 的记录会标记 `ann_date_is_approx`，严格点时被阻断。
 
 ### 1.2 tencent —— 行情备源（HTTP 零鉴权）
 
@@ -70,8 +70,7 @@
 ### 1.5 mootdx —— 行情主源（通达信 TCP）
 
 - `kind = "python_sdk"`，包 `myfin_py.sources.mootdx_source`。
-- 数据集：`daily, price_val`。依赖活跃 fork **mootdx-plus 0.12.0+**
-  （已修北交所 920 号段市场映射）。
+- 数据集：`daily`。版本由 `pyproject.toml` 与 `uv.lock` 固定；北交所仍在策略配置中排除。
 - 上游公共服务器轮换/失联时按链 fallback 到 tencent/tushare；服务器列表需维护。
 - 复权需本地 xdxr 除权除息数据，暂不作 adj 主源。
 
@@ -83,11 +82,10 @@
 | adj_factor | baostock | 单源，后复权累计因子 |
 | financial | baostock | 单源，季频财务 |
 | earnings_notice | baostock → akshare | akshare 辅助补缺 |
-| price_val | mootdx → tencent | 股本/快照（估值自算用） |
+| price_val | baostock | 历史股本与不复权收盘价（估值自算用） |
 | macro | akshare | 单源，仅辅助 |
 
 链被 `mf-datasource` 的 `Registry::validate` 校验（链键与内部 `dataset` 字段一致、
-链内源名必须已在 `sources` 定义），改链后跑 `mfctl sources list` 确认解析通过。
 
 ## 3. 统一 schema（来自 `crates/mf-core/src/*.rs`）
 
@@ -122,8 +120,12 @@
 | --- | --- | --- |
 | `symbol` | String | `600519.SH` |
 | `report_period` | NaiveDate | 报告期（如 `2026-03-31`） |
-| `ann_date` | NaiveDate | **披露时点（近似值）**：免费源无公告日期，按报告期末 + 60 天近似 |
-| `fields` | Vec\<(FinancialField, f64)\> | 财务字段键值对 |
+| `ann_date` | NaiveDate | 优先使用来源 `pubDate`；只有 `ann_date_is_approx=true` 时才是报告期末 + 配置偏移的保守近似 |
+| `ann_date_is_approx` | bool | 是否缺少真实公告日；严格点时流程会阻断 |
+| `report_version` | Option\<String\> | 来源报告版本/统计期标识，用于修订值追溯 |
+| `period_kind` | FinancialPeriodKind | 落库用于因子计算的值统一为 `single_quarter` |
+| `raw_fields` | Vec\<(FinancialField, f64)\> | 来源原始值；Baostock 半年报/三季报的累计值在此保留 |
+| `fields` | Vec\<(FinancialField, f64)\> | 转换后的单季财务字段键值对 |
 | `source` | String | 来源标识 |
 
 `FinancialField` 枚举字段（均为元口径，来源为 baostock 映射）：
@@ -176,6 +178,13 @@
 - `Symbol { code, exchange }`，`exchange ∈ {Sse, Szse, Bse}`，输出形如 `600519.SH`；
 - 代码推断：`60/68/9` 开头 → 上交所（`688` 科创板）；`00/002/003/30` → 深交所（`300/301` 创业板）；
   `43/83/87/92` → 北交所；非 6 位代码返回 `None`。
+
+### 3.8 点时股票池与交易状态（`universe.rs`）
+
+`InstrumentSnapshot` 按 `effective_date` 保存名称、行业、ST、上市日、退市日、停牌和涨跌停信息；
+同一标的允许多版本，`mfctl screen --all` 只选择 `effective_date <= as_of` 的最新记录。
+`TradingStatus` 按交易日保存历史停牌和涨跌停状态，回测输入缺失该序列时由配置门禁拒绝运行，
+禁止用当前状态回填历史。
 
 ## 4. 各源免费额度与限制表
 
@@ -230,5 +239,7 @@
 2. 北向资金日频数据 2024-08-19 起停止披露，不得作为信号（`docs/strategy.md` §9）。
 3. 乐咕 PE/PB 历史分位接口已停更，分位一律自算。
 4. 各源前复权口径互相不一致 → 统一不复权 + 复权因子（`docs/adr/0002`）。
-5. 财务数据无公告日期 → `ann_date` 按报告期末 + 60 天近似（`config/screen.toml` 的
-   `as_of.ann_date_approx_days`），as-of 精度损失需在报告数据质量页声明。
+5. Baostock 财务接口若返回 `pubDate` 则直接采用；缺失时才按 `config/screen.toml` 的
+   `as_of.ann_date_approx_days` 推算并设置 `ann_date_is_approx`，严格点时数据质量门会阻断。
+6. Baostock 的半年报/三季报收入和净利润通常是年初至今累计值；适配器先保存原始值，
+   再减去上一报告期累计值生成单季值，TTM 只由四个单季值构造。

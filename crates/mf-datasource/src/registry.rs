@@ -118,10 +118,16 @@ impl Registry {
                 self.version
             )));
         }
-        let names: HashMap<&str, &SourceConfig> = self.sources.iter().map(|s| (s.name.as_str(), s)).collect();
+        let mut names = HashMap::new();
         for s in &self.sources {
             if s.name.is_empty() {
                 return Err(RegistryError::Validation("存在空名字的数据源".into()));
+            }
+            if names.insert(s.name.as_str(), s).is_some() {
+                return Err(RegistryError::Validation(format!(
+                    "数据源名称重复: {}",
+                    s.name
+                )));
             }
             if s.kind == SourceKind::PythonSdk && s.package.is_none() {
                 return Err(RegistryError::Validation(format!(
@@ -146,12 +152,19 @@ impl Registry {
                 )));
             }
             if chain.order.is_empty() {
-                return Err(RegistryError::Validation(format!("数据集 {dataset} 的优先级链为空")));
+                return Err(RegistryError::Validation(format!(
+                    "数据集 {dataset} 的优先级链为空"
+                )));
             }
             for name in &chain.order {
-                if !names.contains_key(name.as_str()) {
+                let Some(source) = names.get(name.as_str()) else {
                     return Err(RegistryError::Validation(format!(
                         "数据集 {dataset} 优先级链引用了未定义的数据源: {name}"
+                    )));
+                };
+                if !source.datasets.contains(dataset) {
+                    return Err(RegistryError::Validation(format!(
+                        "数据集 {dataset} 的优先级链包含未声明该能力的数据源: {name}"
                     )));
                 }
             }

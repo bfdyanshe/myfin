@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import time
+from bisect import bisect_right
 
 import pandas as pd
 
@@ -145,7 +146,7 @@ class BaostockSource(BaseAdapter):
     # financial (quarterly snapshot; fields as list[(name, value)])
     # ------------------------------------------------------------------
 
-    def fetch_financial(self, symbol: str) -> pd.DataFrame:
+    def fetch_financial(self, symbol: str, ann_date_approx_days: int = 60) -> pd.DataFrame:
         code = to_bs_code(symbol)
         today = _dt.date.today()
         current_quarter = (today.month - 1) // 3 + 1
@@ -164,20 +165,54 @@ class BaostockSource(BaseAdapter):
                             stat = rec.get("statDate")
                             if not stat:
                                 continue
-                            snap = snapshots.setdefault(stat, {})
-                            snap.update(mapper(rec))
+                            snap = snapshots.setdefault(
+                                stat, {"fields": {}, "raw_fields": {}, "pub_dates": []}
+                            )
+                            mapped = mapper(rec)
+                            snap["fields"].update(mapped)
+                            snap["raw_fields"].update(mapped)
+                            pub_date = _parse_date(rec.get("pubDate"))
+                            if pub_date is not None:
+                                snap["pub_dates"].append(pub_date)
         if not snapshots:
             return empty_frame("financial")
         rows = []
+        previous_ytd = {}
         for stat, snap in sorted(snapshots.items()):
-            fields = [(f, v) for f in CANONICAL_FIELDS if (v := snap.get(f)) is not None]
+            report_period = to_date(stat)
+            raw_fields = snap["raw_fields"]
+            year = report_period.year
+            quarter = (report_period.month - 1) // 3 + 1
+            fields_map = dict(raw_fields)
+            if quarter > 1:
+                prior = previous_ytd.get(year, {})
+                for field in ("revenue", "net_profit"):
+                    if fields_map.get(field) is not None and prior.get(field) is not None:
+                        fields_map[field] -= prior[field]
+            previous_ytd[year] = dict(raw_fields)
+            fields = [
+                (field, value)
+                for field in CANONICAL_FIELDS
+                if (value := fields_map.get(field)) is not None
+                and _is_finite_number(value)
+            ]
             if not fields:
                 continue
+            pub_dates = snap["pub_dates"]
+            ann_date = (
+                max(pub_dates)
+                if pub_dates
+                else report_period + _dt.timedelta(days=ann_date_approx_days)
+            )
             rows.append({
                 "symbol": symbol,
-                "report_period": to_date(stat),
-                # Free source has no real announcement date: report end + 60d.
-                "ann_date": to_date(stat) + _dt.timedelta(days=60),
+                "report_period": report_period,
+                "ann_date": ann_date,
+                "ann_date_is_approx": not bool(pub_dates),
+                "report_version": stat,
+                "period_kind": "single_quarter",
+                "raw_fields": [{"name": f, "value": v} for f, v in raw_fields.items()
+                               if v is not None and _is_finite_number(v)],
                 "fields": [{"name": f, "value": v} for f, v in fields],
                 "source": self.name,
             })
@@ -189,10 +224,10 @@ class BaostockSource(BaseAdapter):
 
     def _map_profit(self, rec):
         rev = _num(rec, "MBRevenue")
-        np_ = _num(rec, "profit_net", "netProfit")  # yaml: net_profit from profit_net
+        np_ = _num(rec, "profit_net", "netProfit")
         return {
-            "revenue": rev * _WAN if rev else None,
-            "net_profit": np_ * _WAN if np_ else None,
+            "revenue": rev * _WAN if rev is not None else None,
+            "net_profit": np_ * _WAN if np_ is not None else None,
             "eps": _num(rec, "epsTTM"),  # no plain quarterly EPS; epsTTM as approximation
             "gross_margin": _num(rec, "gpMargin"),
             "roe": _num(rec, "roeAvg"),
@@ -202,21 +237,28 @@ class BaostockSource(BaseAdapter):
         return session.query_balance_data(code=code, year=year, quarter=quarter)
 
     def _map_balance(self, rec):
-        equity = _num(rec, "equity")
+        equity = _num(rec, "equity", "totalEquity", "totalShareholderEquity")
+        assets = _num(rec, "totalAssets", "total_assets", "totalAsset")
+        liabilities = _num(rec, "totalLiability", "totalLiabilities", "total_liabilities")
         return {
-            "equity": equity * _WAN if equity else None,
+            "equity": equity * _WAN if equity is not None else None,
+            "total_assets": assets * _WAN if assets is not None else None,
+            "total_liabilities": liabilities * _WAN if liabilities is not None else None,
             "debt_ratio": _num(rec, "liabilityToAsset"),
-            # total_assets / total_liabilities are not exposed by baostock
-            # free quarterly data; omitted from fields when unavailable.
         }
 
     def _cash_flow_data(self, session, code, year, quarter):
         return session.query_cash_flow_data(code=code, year=year, quarter=quarter)
 
     def _map_cash_flow(self, rec):
-        # The free quarterly cash-flow API exposes only ratios (CFOToOR etc.),
-        # not absolute operating cash flow; nothing to map.
-        return {}
+        value = _num(
+            rec,
+            "netCashFlowFromOperatingActivities",
+            "cashFlowFromOperatingActivities",
+            "netOperateCashFlow",
+            "NCFO",
+        )
+        return {"oper_cash_flow": value * _WAN if value is not None else None}
 
     # ------------------------------------------------------------------
     # earnings_notice (forecast + express)
@@ -236,6 +278,57 @@ class BaostockSource(BaseAdapter):
             return empty_frame("earnings_notice")
         df = pd.DataFrame(rows)
         return canonicalize(df, "earnings_notice")
+
+    # ------------------------------------------------------------------
+    # price_val (historical shares aligned to unadjusted daily close)
+    # ------------------------------------------------------------------
+
+    def fetch_price_val(self, symbol: str) -> pd.DataFrame:
+        code = to_bs_code(symbol)
+        today = _dt.date.today()
+        share_points = []
+        with _session() as session:
+            for year in range(2007, today.year + 1):
+                max_quarter = (today.month - 1) // 3 + 1 if year == today.year else 4
+                for quarter in range(1, max_quarter + 1):
+                    for rec in _rows(session.query_profit_data(code=code, year=year, quarter=quarter)):
+                        report_period = _parse_date(rec.get("statDate"))
+                        total = _num(rec, "totalShare", "totalShares")
+                        floating = _num(rec, "liqaShare", "floatShare", "floatShares")
+                        if report_period is not None and total is not None and floating is not None:
+                            share_points.append((report_period, total * _WAN, floating * _WAN))
+            rs = session.query_history_k_data_plus(
+                code,
+                "date,close",
+                start_date="2007-01-01",
+                end_date=today.isoformat(),
+                frequency="d",
+                adjustflag="3",
+            )
+            daily = list(_rows(rs))
+        if not share_points or not daily:
+            return empty_frame("price_val")
+        share_points.sort(key=lambda item: item[0])
+        point_dates = [item[0] for item in share_points]
+        rows = []
+        for rec in daily:
+            trade_date = _parse_date(rec.get("date"))
+            close = _num(rec, "close")
+            if trade_date is None or close is None:
+                continue
+            index = bisect_right(point_dates, trade_date) - 1
+            if index < 0:
+                continue
+            _, total_shares, float_shares = share_points[index]
+            rows.append({
+                "symbol": symbol,
+                "trade_date": trade_date,
+                "close": close,
+                "total_shares": total_shares,
+                "float_shares": float_shares,
+                "source": self.name,
+            })
+        return canonicalize(pd.DataFrame(rows), "price_val")
 
     def _forecast_row(self, rec, symbol):
         yoy = _mid(_num(rec, "profitYoy"), _num(rec, "profitYoyMax"))
@@ -270,3 +363,19 @@ def _mid(lo, hi):
     lo = lo if lo is not None else hi
     hi = hi if hi is not None else lo
     return (lo + hi) / 2.0
+
+
+def _parse_date(value):
+    if value in (None, ""):
+        return None
+    try:
+        return to_date(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_finite_number(value):
+    return value is not None and pd.notna(value) and float(value) not in (
+        float("inf"),
+        float("-inf"),
+    )
