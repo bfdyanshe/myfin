@@ -44,6 +44,12 @@ universe ──> environment ──> undervalued ──> exclude_bad ──> rec
    不得凭空生成数据点；标签的数值永远来自阶段②的计算，不来自 agent 文本。
 3. 环境标签进入输出的 `env_tags` 字段（见 `crates/mf-report` 的 `Candidate.env_tags`）。
 
+当前实现：`mfctl environment` 接收 `EnvironmentMember[]` JSON 和显式 `--as-of`，按行业输出
+`EnvironmentSummary[]` 到 `data/context/environment-YYYY-MM-DD.json`。行业收益采用成员后复权收益
+的等权均值与全体成员均值比较；最近 4 个可见报告期的净利润合计与前 4 期比较，均不足最小样本数时
+只输出空指标，不生成标签。扫描结果可作为 `ScreenInput.environment` 或报告候选的
+`Candidate.environment` 输入，`env_tags` 仍只用于展示，不改变筛选开关。
+
 ## 3. 阶段③ undervalued：低估筛选
 
 目标：找到「当前低估」的标的。估值全部**本地自算**，不依赖任何第三方估值接口

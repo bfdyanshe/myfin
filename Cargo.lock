@@ -1175,6 +1175,7 @@ dependencies = [
 name = "mf-report"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "mf-backtest",
  "mf-core",
  "serde",

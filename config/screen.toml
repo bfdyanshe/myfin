@@ -21,6 +21,16 @@ min_market_cap = 5.0e9
 # 日均成交额下限（剔除流动性不足，防滑点过大）
 min_avg_amount = 5.0e7
 
+[environment]
+# 行业相对收益使用近 6 个月（126 个交易日）窗口，仅作环境归因
+return_window_days = 126
+# 最近 4 个报告期与此前 4 个报告期比较，近似 TTM 同比
+profit_trend_quarters = 4
+# 行业成员不足时不生成环境标签，避免小样本误导
+min_members = 3
+# 行业内至少一半公司的 TTM 净利润改善时标记盈利拐点
+earnings_turning_min_share = 0.5
+
 [undervalued]
 # 分位窗口固定 5 年（约 1250 交易日）；输出时附「上市以来」分位对照
 percentile_window_days = 1250

@@ -9,7 +9,7 @@
 //! ├── financial/          季频财务 + 业绩预告/快报
 //! ├── macro/              宏观指标
 //! ├── reports/            Markdown 报告
-//! ├── context/            环境扫描背景文档（agent 生成）
+//! ├── context/            环境扫描结构化结果与背景文档
 //! └── sync/               增量同步状态（manifest）
 //! ```
 

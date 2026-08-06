@@ -24,9 +24,35 @@ pub enum Stage {
 pub struct ScreenerConfig {
     pub as_of: AsOfCfg,
     pub universe: UniverseCfg,
+    #[serde(default)]
+    pub environment: EnvironmentCfg,
     pub undervalued: UndervaluedCfg,
     pub exclusion: ExclusionCfg,
     pub recovery: RecoveryCfg,
+}
+
+/// 环境归因参数；标签只用于解释和排序，不作为买卖开关。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvironmentCfg {
+    /// 行情收益使用的交易日观察窗口。
+    pub return_window_days: u32,
+    /// 盈利趋势比较的连续报告期数量；4 表示 TTM。
+    pub profit_trend_quarters: u32,
+    /// 生成行业标签所需的最小成员数。
+    pub min_members: u32,
+    /// 行业内 TTM 净利润改善成员占比达到该值时标记为盈利拐点。
+    pub earnings_turning_min_share: f64,
+}
+
+impl Default for EnvironmentCfg {
+    fn default() -> Self {
+        Self {
+            return_window_days: 126,
+            profit_trend_quarters: 4,
+            min_members: 3,
+            earnings_turning_min_share: 0.5,
+        }
+    }
 }
 
 /// as-of 日期：所有因子只使用该日及之前可知的数据（防前视偏差）。
@@ -99,6 +125,22 @@ impl ScreenerConfig {
     }
 
     pub fn validate(&self) -> Result<(), Error> {
+        if self.environment.return_window_days == 0 {
+            return Err(Error::Config("environment.return_window_days 必须大于 0".into()));
+        }
+        if self.environment.profit_trend_quarters == 0 {
+            return Err(Error::Config(
+                "environment.profit_trend_quarters 必须大于 0".into(),
+            ));
+        }
+        if self.environment.min_members == 0 {
+            return Err(Error::Config("environment.min_members 必须大于 0".into()));
+        }
+        if !(0.0..=1.0).contains(&self.environment.earnings_turning_min_share) {
+            return Err(Error::Config(
+                "environment.earnings_turning_min_share 必须在 [0,1]".into(),
+            ));
+        }
         if !(0.0..1.0).contains(&self.undervalued.percentile_max) {
             return Err(Error::Config("undervalued.percentile_max 必须在 (0,1)".into()));
         }

@@ -35,7 +35,7 @@
 | 方面 | 目标或文档描述 | 当前实际状态 | 审查判断 |
 | --- | --- | --- | --- |
 | 不择时 | 持有 6 个月，不做市场择时 | 没有调仓、组合和现金规则 | 目标尚未被完整定义 |
-| 选股 | `universe → environment → undervalued → exclude_bad → recovery → output` | `mf-screener` 已实现纯函数筛选与指标计算 | CLI 数据组装尚未完成 |
+| 选股 | `universe → environment → undervalued → exclude_bad → recovery → output` | `mf-screener` 已实现纯函数筛选、指标计算与输入驱动的行业环境摘要 | 全市场 CLI 数据组装尚未完成 |
 | 低估 | 本地计算 PE/PB 和历史分位 | 已实现 PE/PB、全市场与行业分位计算 | CLI 尚未提供完整跨标的样本 |
 | 不良排除 | 亏损、现金流、负债、净资产等过滤 | 已实现财务快照过滤 | 真实数据字段覆盖仍需补齐 |
 | 回升 | 业绩拐点、分位回升、动量、均线、量能 | 已实现业绩拐点、动量、均线、量能指标 | 月度排序与真实数据回测尚未完成 |
@@ -43,6 +43,7 @@
 | 数据质量 | 跨源对账、缺口阻断、as-of | `verify` 与 `report` 已分别提供对账和质量页入口 | 健康检查结果仍需编排层注入 |
 
 代码证据包括：`crates/mf-screener/src/screening.rs` 的筛选实现、
+`crates/mf-screener/src/environment.rs` 的环境扫描实现、
 `crates/mf-backtest/src/lib.rs` 的月度回测实现，以及
 `crates/mfctl/src/main.rs` 对 JSON 输入和报告落盘的编排。
 

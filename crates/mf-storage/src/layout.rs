@@ -59,6 +59,11 @@ impl Layout {
         self.root.join("context")
     }
 
+    /// 环境扫描结构化结果路径。
+    pub fn context_path(&self, name: &str) -> PathBuf {
+        self.context_dir().join(name)
+    }
+
     pub fn sync_dir(&self) -> PathBuf {
         self.root.join("sync")
     }

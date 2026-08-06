@@ -9,11 +9,15 @@
 //! ⑥ 输出       候选清单 + 环境归因标签 + 风险旗标 + 数据质量页
 
 pub mod config;
+pub mod environment;
 pub mod metrics;
 pub mod screening;
 pub mod stage;
 
-pub use config::{ExclusionCfg, RecoveryCfg, ScreenerConfig, UndervaluedCfg, UniverseCfg};
+pub use config::{
+    EnvironmentCfg, ExclusionCfg, RecoveryCfg, ScreenerConfig, UndervaluedCfg, UniverseCfg,
+};
+pub use environment::{scan_environment, EnvironmentMember};
 pub use metrics::{
     momentum, percentile_rank, simple_moving_average, trailing_twelve_months, volume_ratio,
 };

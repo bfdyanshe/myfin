@@ -422,6 +422,7 @@ mod tests {
             market_pb_samples: Vec::new(),
             industry_pe_samples: Vec::new(),
             industry_pb_samples: Vec::new(),
+            environment: None,
         };
         input.bars.push(bar("000001.SZ", "2026-02-28"));
         assert_eq!(

@@ -107,7 +107,7 @@ data/
 ├── financial/           季频财务快照 + 业绩预告/快报（按年分文件）
 ├── macro/               宏观指标（akshare，辅助）
 ├── reports/             Markdown 报告（mfctl report 输出，data/reports/backtest-*.md 为回测表）
-├── context/             环境扫描背景文档（agent 生成，只润色不创造数据）
+├── context/             环境扫描结构化结果与背景文档（标签由程序计算）
 └── sync/                增量同步状态 manifest（JSONL 追加式，每数据集一个文件）
 ```
 
@@ -198,12 +198,13 @@ flowchart LR
 | `sources check` | 全源健康检查（基准股探针） | M3：Python + Rust HTTP 已接入 |
 | `sync` | 增量同步单源单标的数据 | M3：Python SDK + Rust HTTP daily 已接入 |
 | `screen` | 运行选股流水线 | M4 实现 |
+| `environment` | 按行业计算相对收益与盈利趋势标签 | M5：输入驱动实现 |
 | `report` | 生成候选与数据质量 Markdown 报告 | M5（JSON 输入已接入） |
 | `doctor` | 数据目录健康审计（目录统计） | ✅ M1 已实现 |
 | `verify` | 跨源抽查对账 | M3/M4 实现 |
 | `backtest` | 历史月度截面重建回测 | M4 实现 |
 
-`screen`、`backtest` 和 `report` 已接入输入驱动流程；全市场数据编排与环境 context 仍由后续阶段补齐。
+`screen`、`environment`、`backtest` 和 `report` 已接入输入驱动流程；从本地数据目录自动编排全市场输入仍由后续阶段补齐。
 
 ## 9. as-of 模块
 
@@ -235,7 +236,7 @@ flowchart LR
 | M2 | 存储层：Parquet 写入 + DuckDB 查询引擎（SQLite 可选） | ✅ 完成 |
 | M3 | 数据源适配器（Rust HTTP 两源）、增量同步、`sources check`/`sync`/`verify` | ✅ 完成 |
 | M4 | 选股流水线 + as-of 模块 + 月度截面重建回测（`screen`/`backtest`） | 进行中：筛选与 JSON 输入回测已接入 |
-| M5 | 报告完善（候选清单 + 数据质量页）、环境扫描 context 流程 | 进行中：候选与数据质量页已接入 |
+| M5 | 报告完善（候选清单 + 数据质量页）、环境扫描 context 流程 | 进行中：报告与输入驱动环境扫描已接入 |
 | M6 | 硬化：熔断/重试打磨、质量门补全、文档收尾 | 待做 |
 
 ## 12. 仓库布局
@@ -276,6 +277,8 @@ cargo test
 ./target/debug/mfctl sync --source auto --dataset daily --symbol sh600519 \
     --start 2021-01-01 --end 2026-08-05        # 按 daily 优先级链自动故障切换
 ./target/debug/mfctl screen                  # 选股流水线（M4 落地）
+./target/debug/mfctl environment --input data/context/members.json --as-of 2026-08-05 \
+                                             # 行业环境归因（M5 输入驱动）
 ./target/debug/mfctl report                  # Markdown 报告（M5 落地）
 ./target/debug/mfctl verify --symbol 600519.SH --start 2021-01-01 --end 2026-08-05 \
                                              # 跨源抽查对账（要求同日多源数据）

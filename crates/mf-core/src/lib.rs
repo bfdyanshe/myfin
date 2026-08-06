@@ -5,12 +5,14 @@
 
 pub mod bar;
 pub mod error;
+pub mod environment;
 pub mod financial;
 pub mod symbol;
 pub mod valuation;
 
 pub use bar::{AdjFactor, DailyBar};
 pub use error::{Error, Result};
+pub use environment::EnvironmentSummary;
 pub use financial::{EarningsNotice, FinancialData, FinancialField};
 pub use symbol::{Exchange, Market, Symbol};
 pub use valuation::{PriceVal, ValuationPoint};

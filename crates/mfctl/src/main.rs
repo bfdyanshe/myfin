@@ -4,6 +4,7 @@
 //! - `sources`   数据源注册表状态 / 健康检查（AI 维护数据源的核心入口）
 //! - `sync`      增量同步行情/财务数据（M3）
 //! - `screen`    运行选股流水线（M4）
+//! - `environment` 计算行业环境归因标签（M5）
 //! - `report`    生成 Markdown 报告（M4/M5）
 //! - `doctor`    数据目录健康审计
 //! - `verify`    跨源抽查对账（M3/M4）
@@ -23,7 +24,9 @@ use mf_datasource::{
     http::HttpAdapter, Dataset, Registry, SourceConfig, SourceKind, DEFAULT_REGISTRY_PATH,
 };
 use mf_report::{backtest_markdown, candidate_markdown, ReportInput};
-use mf_screener::{screen, ScreenInput, ScreenerConfig};
+use mf_screener::{
+    scan_environment, screen, EnvironmentMember, ScreenInput, ScreenerConfig,
+};
 use mf_storage::{
     Layout, ParquetStore, StagingManifest, SyncEntry, SyncManifest, SyncStatus,
 };
@@ -59,6 +62,8 @@ enum Command {
     Sync(SyncArgs),
     /// 运行选股流水线（M4）
     Screen(ScreenArgs),
+    /// 计算行业环境归因标签（M5）
+    Environment(EnvironmentArgs),
     /// 生成 Markdown 报告（M4/M5）
     Report(ReportArgs),
     /// 数据目录健康审计
@@ -95,6 +100,7 @@ fn main() -> Result<()> {
         },
         Command::Sync(args) => cmd_sync(&registry, &cli.registry, &layout, args),
         Command::Screen(args) => cmd_screen(&layout, args),
+        Command::Environment(args) => cmd_environment(&layout, args),
         Command::Report(args) => cmd_report(&layout, args),
         Command::Doctor => cmd_doctor(&layout),
         Command::Verify(args) => cmd_verify(&layout, args),
@@ -311,6 +317,25 @@ struct ScreenArgs {
     /// 完整 ScreenInput JSON；用于提供全市场与行业估值样本
     #[arg(long)]
     input: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct EnvironmentArgs {
+    /// 包含 EnvironmentMember 数组的 JSON 文件
+    #[arg(long)]
+    input: PathBuf,
+
+    /// 环境扫描 as-of 日期
+    #[arg(long)]
+    as_of: String,
+
+    /// 筛选配置文件（读取其中的 environment 参数）
+    #[arg(long, default_value = "config/screen.toml")]
+    config: PathBuf,
+
+    /// 结构化结果输出路径；默认写入 data/context/environment-YYYY-MM-DD.json
+    #[arg(long)]
+    out: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -664,6 +689,7 @@ fn cmd_screen(layout: &Layout, args: ScreenArgs) -> Result<()> {
             market_pb_samples: Vec::new(),
             industry_pe_samples: Vec::new(),
             industry_pb_samples: Vec::new(),
+            environment: None,
         }
     };
     if let Some(symbol) = args.symbol {
@@ -679,6 +705,38 @@ fn cmd_screen(layout: &Layout, args: ScreenArgs) -> Result<()> {
     }
     let result = screen(&input, &config);
     println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+fn cmd_environment(layout: &Layout, args: EnvironmentArgs) -> Result<()> {
+    let config = ScreenerConfig::load(&args.config)
+        .with_context(|| format!("加载筛选配置 {} 失败", args.config.display()))?;
+    let as_of = parse_cli_date(&args.as_of, "as-of")?;
+    let raw = std::fs::read_to_string(&args.input)
+        .with_context(|| format!("读取环境扫描输入 {} 失败", args.input.display()))?;
+    let members = serde_json::from_str::<Vec<EnvironmentMember>>(&raw)
+        .with_context(|| format!("解析环境扫描输入 {} 失败", args.input.display()))?;
+    if members.is_empty() {
+        anyhow::bail!("环境扫描输入没有成员");
+    }
+    let summaries = scan_environment(&members, as_of, &config.environment);
+    if summaries.is_empty() {
+        anyhow::bail!("环境扫描输入没有带行业字段的成员");
+    }
+    let output = args.out.unwrap_or_else(|| {
+        layout.context_path(&format!("environment-{as_of}.json"))
+    });
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&output, serde_json::to_string_pretty(&summaries)?)?;
+    let tagged = summaries.iter().filter(|summary| !summary.tags.is_empty()).count();
+    println!(
+        "ENVIRONMENT: {} 个行业，{} 个行业生成标签；结果 {}",
+        summaries.len(),
+        tagged,
+        output.display()
+    );
     Ok(())
 }
 

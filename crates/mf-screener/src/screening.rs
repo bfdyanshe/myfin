@@ -3,7 +3,10 @@
 use std::collections::BTreeMap;
 
 use chrono::{Duration, NaiveDate};
-use mf_core::{AdjFactor, DailyBar, EarningsNotice, FinancialData, FinancialField, PriceVal};
+use mf_core::{
+    AdjFactor, DailyBar, EarningsNotice, EnvironmentSummary, FinancialData, FinancialField,
+    PriceVal,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::metrics::{
@@ -28,6 +31,9 @@ pub struct ScreenInput {
     pub market_pb_samples: Vec<f64>,
     pub industry_pe_samples: Vec<f64>,
     pub industry_pb_samples: Vec<f64>,
+    /// 可选的环境扫描结果；标签只用于输出和解释，不参与筛选开关。
+    #[serde(default)]
+    pub environment: Option<EnvironmentSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -55,6 +61,7 @@ pub struct ScreenResult {
     pub stage: String,
     pub reason: Option<String>,
     pub metrics: ScreenMetrics,
+    pub environment: Option<EnvironmentSummary>,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +76,7 @@ pub fn screen(input: &ScreenInput, config: &ScreenerConfig) -> ScreenResult {
     let mut result = screen_inner(input, config);
     result.symbol = input.symbol.clone();
     result.as_of = input.as_of;
+    result.environment = input.environment.clone();
     result
 }
 
@@ -451,6 +459,7 @@ fn screen_inner(input: &ScreenInput, config: &ScreenerConfig) -> ScreenResult {
         stage: "output".to_string(),
         reason: None,
         metrics: result_metrics,
+        environment: None,
     }
 }
 
@@ -499,6 +508,7 @@ fn rejected(stage: &str, reason: &str, metrics: ScreenMetrics) -> ScreenResult {
         stage: stage.to_string(),
         reason: Some(reason.to_string()),
         metrics,
+        environment: None,
     }
 }
 
@@ -655,6 +665,7 @@ mod tests {
             market_pb_samples: Vec::new(),
             industry_pe_samples: Vec::new(),
             industry_pb_samples: Vec::new(),
+            environment: None,
         };
         let config_path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/screen.toml");

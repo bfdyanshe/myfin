@@ -6,6 +6,7 @@
 use std::fmt::Write;
 
 use mf_backtest::BacktestReport;
+use mf_core::EnvironmentSummary;
 
 /// 候选股条目（M4 填充完整字段）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -25,7 +26,11 @@ pub struct Candidate {
     /// 3 个月收益（%）
     pub momentum_3m_pct: Option<f64>,
     /// 环境归因标签（由数据计算，agent 只润色）
+    #[serde(default)]
     pub env_tags: Vec<String>,
+    /// 环境扫描的结构化结果；用于审计标签来源。
+    #[serde(default)]
+    pub environment: Option<EnvironmentSummary>,
     /// 风险旗标
     pub risk_flags: Vec<String>,
     /// 入选理由（可读文本）
@@ -94,6 +99,14 @@ pub fn candidate_table(candidates: &[Candidate]) -> Vec<Vec<String>> {
     candidates
         .iter()
         .map(|c| {
+            let env_tags = if c.env_tags.is_empty() {
+                c.environment
+                    .as_ref()
+                    .map(|environment| environment.tags.clone())
+                    .unwrap_or_default()
+            } else {
+                c.env_tags.clone()
+            };
             vec![
                 c.symbol.clone(),
                 c.name.clone(),
@@ -102,7 +115,7 @@ pub fn candidate_table(candidates: &[Candidate]) -> Vec<Vec<String>> {
                 c.pb_percentile.map(|v| format!("{:.1}%", v * 100.0)).unwrap_or_default(),
                 c.earnings_turnaround_yoy.map(|v| format!("{:.1}%", v)).unwrap_or_default(),
                 c.momentum_3m_pct.map(|v| format!("{:.1}%", v)).unwrap_or_default(),
-                c.env_tags.join("; "),
+                env_tags.join("; "),
                 c.rationale.clone(),
             ]
         })
@@ -271,5 +284,40 @@ mod tests {
         assert!(markdown.contains("## 数据质量"));
         assert!(markdown.contains("不将其视为通过"));
         assert!(markdown.contains("测试说明"));
+    }
+
+    #[test]
+    fn renders_tags_from_structured_environment_summary() {
+        let markdown = candidate_markdown(&ReportInput {
+            candidates: vec![Candidate {
+                symbol: "600519.SH".to_string(),
+                name: "测试标的".to_string(),
+                industry: Some("食品饮料".to_string()),
+                pe_percentile: None,
+                pb_percentile: None,
+                pb_industry_percentile: None,
+                earnings_turnaround_yoy: None,
+                momentum_3m_pct: None,
+                env_tags: Vec::new(),
+                environment: Some(EnvironmentSummary {
+                    industry: "食品饮料".to_string(),
+                    as_of: chrono::NaiveDate::from_ymd_opt(2026, 8, 5).unwrap(),
+                    return_window_days: 126,
+                    member_count: 3,
+                    valid_return_members: 3,
+                    industry_return: Some(-0.1),
+                    market_return: Some(0.0),
+                    relative_return: Some(-0.1),
+                    valid_profit_members: 3,
+                    profit_trend_share: Some(2.0 / 3.0),
+                    tags: vec!["industry_earnings_turning".to_string()],
+                }),
+                risk_flags: Vec::new(),
+                rationale: "测试".to_string(),
+            }],
+            source_health: Vec::new(),
+            quality_notes: Vec::new(),
+        });
+        assert!(markdown.contains("industry_earnings_turning"));
     }
 }
