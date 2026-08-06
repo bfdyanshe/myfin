@@ -26,8 +26,10 @@ from myfin_py.schema import (
 
 try:
     import baostock as bs
+    from baostock.common import contants as bs_constants
 except Exception as exc:  # pragma: no cover - machine without SDK installed
     bs = None
+    bs_constants = None
     IMPORT_ERROR = f"baostock SDK import failed (pip install baostock): {exc}"
 else:
     IMPORT_ERROR = None
@@ -36,7 +38,6 @@ from myfin_py.sources import BaseAdapter, SourceError  # noqa: E402
 
 _BS_FIELDS = "date,open,high,low,close,volume,amount"
 _WAN = 1e4  # baostock quarterly financials report amounts in 万元 -> 元
-_BLACKLIST_ERROR_CODE = "10001011"
 _BLACKLIST_COOLDOWN_SECONDS = 3600.0
 _QUERY_INTERVAL_SECONDS = 0.8
 _blacklisted_until = 0.0
@@ -69,7 +70,7 @@ def _session():
     remaining = _blacklisted_until - time.monotonic()
     if remaining > 0:
         raise SourceError(
-            f"Baostock 服务端拒绝当前访问来源（错误码 {_BLACKLIST_ERROR_CODE}：黑名单用户），"
+            "Baostock 服务端拒绝当前访问来源（黑名单用户），"
             f"本进程将在 {remaining:.0f} 秒内停止重试；请联系 Baostock 管理员解除限制",
             source="baostock",
             operation="login",
@@ -79,10 +80,14 @@ def _session():
         password=os.environ.get("BAOSTOCK_PASSWORD", "123456"),
     )
     if login.error_code != "0":
-        if login.error_code == _BLACKLIST_ERROR_CODE:
+        blacklist_code = getattr(bs_constants, "BSERR_BLACKLIST_USER", None)
+        if (
+            login.error_code == blacklist_code
+            or "黑名单" in (login.error_msg or "")
+        ):
             _blacklisted_until = time.monotonic() + _BLACKLIST_COOLDOWN_SECONDS
             raise SourceError(
-                f"Baostock 服务端拒绝当前访问来源（错误码 {_BLACKLIST_ERROR_CODE}：黑名单用户），"
+                f"Baostock 服务端拒绝当前访问来源（错误码 {login.error_code}：黑名单用户），"
                 "不再自动重试；请联系 Baostock 管理员解除限制",
                 source="baostock",
                 operation="login",
