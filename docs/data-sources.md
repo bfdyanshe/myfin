@@ -257,3 +257,25 @@
    `as_of.ann_date_approx_days` 推算并设置 `ann_date_is_approx`，严格点时数据质量门会阻断。
 6. Baostock 的半年报/三季报收入和净利润通常是年初至今累计值；适配器先保存原始值，
    再减去上一报告期累计值生成单季值，TTM 只由四个单季值构造。
+
+## 8. 全市场截面构建器
+
+`py/scripts/build_full_market_snapshot.py` 用于生成一个可复跑的全市场点时截面，
+不改变 `mfctl sync` 的默认优先级链。它按当前总市值不低于 50 亿元、排除北交所的
+股票建立股票池，并将缓存和摘要写入 `data/universe/YYYY-MM-DD/`：
+
+```bash
+PYTHONPATH=py/src py/.venv/bin/python \
+  py/scripts/build_full_market_snapshot.py \
+  --data-dir data --as-of 2026-08-06
+```
+
+批量口径如下：股票基础信息优先使用 Baostock；不复权日线使用 Baostock，按注册表
+约定至少间隔 800 ms；新浪公开财务报告接口提供带真实公告日的季度财务快照；AKShare
+批量接口提供业绩预告；申万历史分类文件提供行业代码。每只股票的原始结果保存在
+`data/universe/YYYY-MM-DD/cache/`，因此网络中断后可重复执行并复用已完成数据。
+
+该构建器遵循“单标的失败只留空数据”的约定，`summary.json` 会记录失败股票和警告。
+批量构建暂不拉取全市场复权因子，报告必须明确标注技术指标使用不复权价格；行业分类
+文件不可用时行业设为 `UNKNOWN`，此时行业分位只能解释为同一缺省组的截面分位，不能
+当作真实行业比较。
